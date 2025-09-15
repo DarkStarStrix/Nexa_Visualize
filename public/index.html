@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Nexa Visualize</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg-dark: #0a0a0a; --bg-panel: rgba(20, 20, 25, 0.9); --border-color: #444;
+      --text-light: #eee; --text-med: #ccc; --text-dark: #aaa;
+      --cyan: #22d3ee; --blue: #3b82f6; --purple: #a855f7; --green: #22c55e; --red: #ef4444;
+    }
+    body { margin: 0; background: var(--bg-dark); color: var(--text-light); font-family: 'Segoe UI', sans-serif; overflow: hidden; }
+    #main3d { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; display: block; }
+    .panel { position: absolute; background: var(--bg-panel); backdrop-filter: blur(10px); border-radius: 8px; }
+    #header-panel { top: 1rem; left: 1rem; padding: 0.75rem; }
+    #header-panel h2 { margin: 0 0 0.5rem 0; font-size: 1.125rem; font-weight: bold; color: var(--cyan); }
+    #status-badge { font-size: 0.75rem; padding: 0.25rem 0.5rem; border-radius: 4px; font-weight: bold; }
+    #header-panel .text-xs { font-size: 0.75rem; color: var(--text-med); }
+    #controls-panel { top: 1rem; right: 1rem; }
+    .tab-buttons { display: flex; }
+    .tab-buttons button { padding: 0.5rem 0.75rem; border: none; color: var(--text-light); font-size: 0.75rem; font-weight: 500; cursor: pointer; transition: background-color 0.2s; }
+    .tab-buttons button:first-child { border-top-left-radius: 8px; }
+    .tab-buttons button:last-child { border-top-right-radius: 8px; }
+    .tab-buttons button.inactive { background-color: #374151; }
+    .tab-buttons button.inactive:hover { background-color: #4b5563; }
+    #arch-btn.active { background-color: var(--purple); }
+    #param-btn.active { background-color: var(--blue); }
+    #opt-btn.active { background-color: var(--green); }
+    .controls-content { padding: 0.75rem; border-top: 1px solid var(--border-color); }
+    .controls-row { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem; }
+    .flex { display: flex; }
+    .gap-1 { gap: 0.25rem; } .gap-2 { gap: 0.5rem; } .gap-3 { gap: 0.75rem; }
+    .items-center { align-items: center; }
+    .text-xs { font-size: 0.75rem; }
+    .w-12 { width: 3rem; } .w-8 { width: 2rem; }
+    input[type="range"] { height: 0.25rem; }
+    .btn { background: #444; color: #fff; border: none; border-radius: 4px; padding: 0.25rem 1rem; cursor: pointer; transition: background 0.2s; }
+    .btn:hover { background: #555; }
+    .btn.start { background-color: var(--green); } .btn.start:hover { background-color: #16a34a; }
+    .btn.stop { background-color: var(--red); } .btn.stop:hover { background-color: #dc2626; }
+    .btn:disabled { background-color: #4b5563; cursor: not-allowed; }
+    #status-panel { bottom: 1rem; left: 1rem; right: 1rem; padding: 0.75rem; display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; text-align: center; }
+    #status-panel .text-lg { font-size: 1.125rem; font-weight: bold; }
+    #panel-details-container {
+      display: none; /* Hidden by default */
+      padding: 1rem;
+      border-top: 1px solid var(--border-color);
+      max-height: calc(100vh - 20rem);
+      overflow-y: auto;
+    }
+    .active-panel { display: none; } /* Panels inside are hidden by default */
+    .active-panel.visible { display: block; } /* Only the active one is shown */
+    .layer-item { background: #27272a; padding: 0.5rem; border-radius: 4px; }
+    label { display: block; font-size: 0.75rem; margin-bottom: 0.25rem; }
+    input, select { width: 100%; background: #3f3f46; border: 1px solid #52525b; color: #fff; border-radius: 4px; padding: 0.25rem; box-sizing: border-box; font-size: 0.75rem; }
+    .hidden { display: none; }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.153.0/build/three.min.js"></script>
+</head>
+<body>
+  <canvas id="main3d"></canvas>
+
+  <!-- Header -->
+  <div id="header-panel" class="panel">
+    <div class="flex items-center" style="justify-content: space-between; margin-bottom: 0.5rem;">
+      <h2 class="text-lg font-bold text-cyan-400">Nexa Visualize</h2>
+      <div id="status-badge">IDLE</div>
+    </div>
+    <div id="network-stats" class="text-xs"></div>
+  </div>
+
+  <!-- Unified Control Panel -->
+  <div id="controls-panel" class="panel" style="position: absolute; top: 1rem; right: 1rem; width: 320px;">
+    <!-- Main Controls -->
+    <div class="controls-content" style="border-top: none;">
+      <div class="controls-row">
+        <div class="flex gap-1">
+          <button id="cam-auto-btn" class="btn">Auto</button>
+          <button id="cam-manual-btn" class="btn">Manual</button>
+        </div>
+        <div class="flex items-center gap-1 text-xs">
+          <span>Speed:</span>
+          <label for="speed-slider"></label><input type="range" min="0.5" max="3.0" step="0.1" value="1.0" id="speed-slider" class="w-12">
+          <span id="speed-value" class="w-8">1.0x</span>
+        </div>
+      </div>
+      <div class="flex gap-2" style="margin-top: 0.75rem;">
+        <button id="start-btn" class="btn start" style="flex-grow: 1;">Start Training</button>
+        <button id="stop-btn" class="btn stop hidden" style="flex-grow: 1;">Stop</button>
+        <button id="reset-btn" class="btn" style="flex-grow: 1;">Reset</button>
+      </div>
+    </div>
+
+    <!-- Tab buttons to expand details -->
+    <div class="tab-buttons" style="border-top: 1px solid var(--border-color);">
+      <button id="arch-btn" class="inactive" style="border-radius: 0;">Architecture</button>
+      <button id="param-btn" class="inactive" style="border-radius: 0;">Parameters</button>
+      <button id="opt-btn" class="inactive" style="border-radius: 0;">Monitoring</button>
+    </div>
+
+    <!-- Collapsible Details Container -->
+    <div id="panel-details-container">
+      <div id="architecture-panel" class="active-panel"></div>
+      <div id="parameters-panel" class="active-panel"></div>
+      <div id="optimization-panel" class="active-panel">
+        <h3 style="color: var(--green);">Training Metrics</h3>
+        <canvas id="loss-acc-canvas" style="width: 100%; height: 150px; border-radius: 4px; background: #222; margin-bottom: 0.75rem;"></canvas>
+        <div id="optimization-info" class="text-xs" style="display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.75rem;">
+          <p>🟢 Accuracy: How often the model's predictions are correct.</p>
+          <p>🔴 Loss: The error between the model's prediction and the ground truth.</p>
+          <div style="background: #27272a; padding: 0.5rem; border-radius: 4px; margin-top: 0.5rem;">
+            <div>Optimizer: <span id="opt-info-optimizer" style="color: var(--blue);"></span></div>
+            <div>Loss Function: <span id="opt-info-loss-func" style="color: var(--cyan);"></span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Status Bar -->
+  <div id="status-panel" class="panel">
+    <div>
+      <div class="text-xs text-dark">Epoch</div>
+      <div id="epoch-value" class="text-lg" style="color: var(--cyan);">0</div>
+    </div>
+    <div>
+      <div class="text-xs text-dark">Batch</div>
+      <div id="batch-value" class="text-lg" style="color: var(--blue);">0</div>
+    </div>
+    <div>
+      <div class="text-xs text-dark">Loss</div>
+      <div id="loss-value" class="text-lg" style="color: var(--red);">1.0000</div>
+    </div>
+    <div>
+      <div id="accuracy-label" class="text-xs text-dark">Accuracy</div>
+      <div id="accuracy-value" class="text-lg" style="color: var(--green);">0.0%</div>
+    </div>
+  </div>
+
+  <script src="main.js"></script>
+</body>
+</html>
