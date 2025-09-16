@@ -39,7 +39,23 @@ To view this project, you need to run it from a local web server. You cannot sim
 
 Here are a few easy ways to start a local server:
 
-### Option 1: Using Python
+### Option 1: Using Docker (Recommended)
+
+You can build and run this project in a Docker container for easy deployment on any OS.
+
+1. **Build the Docker image** (from the project root):
+    ```sh
+    docker build -t nexa-visualize .
+    ```
+2. **Run the container**:
+    ```sh
+    docker run -p 3000:3000 nexa-visualize
+    ```
+3. Open your browser and go to: **http://localhost:3000**
+
+---
+
+### Option 2: Using Python
 
 If you have Python installed, it comes with a simple built-in web server.
 
@@ -54,7 +70,7 @@ If you have Python installed, it comes with a simple built-in web server.
 
 4.  Open your web browser and go to: **http://localhost:8000**
 
-### Option 2: Using Node.js (`serve` package)
+### Option 3: Using Node.js (`serve` package)
 
 If you have Node.js and npm, you can use the `serve` package.
 
@@ -72,7 +88,7 @@ If you have Node.js and npm, you can use the `serve` package.
     ```
 4.  The terminal will give you a URL, usually `http://localhost:3000`. Open it in your browser.
 
-### Option 3: Using VS Code Live Server Extension
+### Option 4: Using VS Code Live Server Extension
 
 If you use Visual Studio Code as your editor:
 
