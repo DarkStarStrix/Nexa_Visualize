@@ -22,7 +22,8 @@ document.addEventListener('DOMContentLoaded', () => {
       epochs: 100,
       optimizer: 'Adam',
       lossFunction: 'CrossEntropy'
-    }
+    },
+    theme: localStorage.getItem('theme') || 'dark'
   };
 
   // --- DOM ELEMENTS ---
@@ -30,6 +31,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const archPanel = document.getElementById('architecture-panel');
   const paramPanel = document.getElementById('parameters-panel');
   const optPanel = document.getElementById('optimization-panel');
+  const settingsPanel = document.getElementById('settings-panel');
   const panelDetailsContainer = document.getElementById('panel-details-container');
 
   // --- 3D SETUP ---
@@ -54,14 +56,15 @@ document.addEventListener('DOMContentLoaded', () => {
   fillLight.position.set(-10, 10, -10);
   scene.add(fillLight);
 
-  const gridHelper = new THREE.GridHelper(40, 40, 0x444444, 0x222222);
-  gridHelper.position.y = -8;
-  scene.add(gridHelper);
+  // const gridHelper = new THREE.GridHelper(40, 40, 0x444444, 0x222222);
+  // gridHelper.position.y = -8;
+  // scene.add(gridHelper);
 
   const lossAccCanvas = document.getElementById('loss-acc-canvas');
 
   let neurons = [];
   let connections = [];
+  let gridHelper = null;
   let animationProgress = 0;
   let trainingInterval = null;
 
@@ -180,9 +183,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.getElementById('start-btn').classList.toggle('hidden', state.isTraining);
     document.getElementById('stop-btn').classList.toggle('hidden', !state.isTraining);
+    document.getElementById('settings-btn').classList.toggle('active', state.activePanel === 'settings');
     document.getElementById('start-btn').disabled = state.isTrainingComplete;
-    document.getElementById('cam-auto-btn').style.backgroundColor = state.cameraMode === 'auto' ? 'var(--purple)' : '#4b5563';
-    document.getElementById('cam-manual-btn').style.backgroundColor = state.cameraMode === 'manual' ? 'var(--purple)' : '#4b5563';
     document.getElementById('speed-value').textContent = `${state.animationSpeed.toFixed(1)}x`;
 
     document.getElementById('epoch-value').textContent = state.epoch;
@@ -195,7 +197,29 @@ document.addEventListener('DOMContentLoaded', () => {
     archPanel.classList.toggle('visible', state.activePanel === 'architecture');
     paramPanel.classList.toggle('visible', state.activePanel === 'parameters');
     optPanel.classList.toggle('visible', state.activePanel === 'optimization');
+    settingsPanel.classList.toggle('visible', state.activePanel === 'settings');
     panelDetailsContainer.style.display = state.activePanel ? 'block' : 'none';
+    document.getElementById('camera-mode-toggle').checked = state.cameraMode === 'manual';
+  }
+
+function applyTheme() {
+    if (gridHelper) {
+      scene.remove(gridHelper);
+    }
+
+    const isLight = state.theme === 'light';
+
+    const gridColor = isLight ? 0xaaaaaa : 0x444444;
+    const subGridColor = isLight ? 0xbbbbbb : 0x222222;
+    const sceneBgColor = isLight ? 0xf0f0f0 : 0x0a0a0a;
+
+    document.body.classList.toggle('light-mode', isLight);
+
+    scene.background.set(sceneBgColor);
+
+    gridHelper = new THREE.GridHelper(40, 40, gridColor, subGridColor);
+    gridHelper.position.y = -8;
+    scene.add(gridHelper);
   }
 
   function renderArchitecturePanel() {
@@ -214,7 +238,7 @@ document.addEventListener('DOMContentLoaded', () => {
         </div>
       </div>`;
     });
-    html += `</div><button id="add-layer-btn" class="btn" style="width: 100%; margin-top: 0.75rem; background-color: var(--purple);">Add Hidden Layer</button>`;
+    html += `</div><button id="add-layer-btn" class="btn" style="width: 100%; margin-top: 0.75rem; background-color: var(--purple); color: #fff;">Add Hidden Layer</button>`;
     archPanel.innerHTML = html;
   }
 
@@ -246,14 +270,42 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('opt-info-loss-func').textContent = state.trainingParams.lossFunction;
   }
 
+  function renderSettingsPanel() {
+      settingsPanel.innerHTML = `<h3 style="color: var(--cyan);">Appearance Settings</h3>
+        <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+          <div>
+            <label>Theme:</label>
+            <div class="flex gap-2 items-center">
+              <span>Dark</span>
+              <label class="switch">
+                <input type="checkbox" id="theme-toggle" ${state.theme === 'light' ? 'checked' : ''}>
+                <span class="slider round"></span>
+              </label>
+              <span>Light</span>
+            </div>
+          </div>
+        </div>`;
+
+        document.getElementById('theme-toggle').addEventListener('change', (e) => {
+          state.theme = e.target.checked ? 'light' : 'dark';
+          localStorage.setItem('theme', state.theme);
+          applyTheme();
+          updateUI();
+        });
+    }
+
   let lossHistory = [], accHistory = [];
-  function drawLossAccGraph() {
+function drawLossAccGraph() {
       const ctx = lossAccCanvas.getContext('2d');
       const w = lossAccCanvas.width, h = lossAccCanvas.height;
       ctx.clearRect(0, 0, w, h);
 
+      const computedStyle = getComputedStyle(document.documentElement);
+      const redColor = computedStyle.getPropertyValue('--red').trim();
+      const greenColor = computedStyle.getPropertyValue('--green').trim();
+
       // Draw Loss (Red)
-      ctx.strokeStyle = 'var(--red)';
+      ctx.strokeStyle = redColor;
       ctx.lineWidth = 2;
       ctx.beginPath();
       lossHistory.forEach((v, i) => {
@@ -264,7 +316,7 @@ document.addEventListener('DOMContentLoaded', () => {
       ctx.stroke();
 
       // Draw Accuracy (Green)
-      ctx.strokeStyle = 'var(--green)';
+      ctx.strokeStyle = greenColor;
       ctx.beginPath();
       accHistory.forEach((v, i) => {
           const x = (i / Math.max(1, accHistory.length - 1)) * w;
@@ -280,15 +332,22 @@ document.addEventListener('DOMContentLoaded', () => {
     if (state.activePanel === 'architecture') renderArchitecturePanel();
     if (state.activePanel === 'parameters') renderParametersPanel();
     if (state.activePanel === 'optimization') renderOptimizationPanel();
+    if (state.activePanel === 'settings') renderSettingsPanel();
     updateUI();
   }
   document.getElementById('arch-btn').addEventListener('click', () => handlePanelToggle('architecture'));
   document.getElementById('param-btn').addEventListener('click', () => handlePanelToggle('parameters'));
   document.getElementById('opt-btn').addEventListener('click', () => handlePanelToggle('optimization'));
-
-  document.getElementById('cam-auto-btn').addEventListener('click', () => { state.cameraMode = 'auto'; updateUI(); });
-  document.getElementById('cam-manual-btn').addEventListener('click', () => { state.cameraMode = 'manual'; updateUI(); });
+	document.getElementById('settings-btn').addEventListener('click', () => handlePanelToggle('settings'));
   document.getElementById('speed-slider').addEventListener('input', e => { state.animationSpeed = parseFloat(e.target.value); updateUI(); });
+
+  document.getElementById('camera-mode-toggle').addEventListener('change', e => {
+    state.cameraMode = e.target.checked ? 'manual' : 'auto';
+  });
+
+
+  const autoBtn = document.getElementById('cam-auto-btn');
+  const manualBtn = document.getElementById('cam-manual-btn');
 
   panelDetailsContainer.addEventListener('click', e => {
     if (e.target.id === 'add-layer-btn') {
@@ -461,5 +520,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   createNetwork();
   updateUI();
+  applyTheme();
   animate();
 });
