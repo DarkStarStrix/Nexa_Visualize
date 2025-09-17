@@ -23,6 +23,7 @@ document.addEventListener('DOMContentLoaded', () => {
       optimizer: 'Adam',
       lossFunction: 'CrossEntropy'
     }
+    theme: localStorage.getItem('theme') || 'dark'
   };
 
   // --- DOM ELEMENTS ---
@@ -30,6 +31,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const archPanel = document.getElementById('architecture-panel');
   const paramPanel = document.getElementById('parameters-panel');
   const optPanel = document.getElementById('optimization-panel');
+  const settingsPanel = document.getElementById('settings-panel');
   const panelDetailsContainer = document.getElementById('panel-details-container');
 
   // --- 3D SETUP ---
@@ -245,6 +247,30 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('opt-info-optimizer').textContent = state.trainingParams.optimizer;
     document.getElementById('opt-info-loss-func').textContent = state.trainingParams.lossFunction;
   }
+
+  function renderSettingsPanel() {
+      settingsPanel.innerHTML = `<h3 style="color: var(--cyan);">Appearance Settings</h3>
+        <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+          <div>
+            <label>Theme:</label>
+            <div class="flex gap-2 items-center">
+              <span>Dark</span>
+              <label class="switch">
+                <input type="checkbox" id="theme-toggle" ${state.theme === 'light' ? 'checked' : ''}>
+                <span class="slider round"></span>
+              </label>
+              <span>Light</span>
+            </div>
+          </div>
+        </div>`;
+
+        document.getElementById('theme-toggle').addEventListener('change', (e) => {
+          state.theme = e.target.checked ? 'light' : 'dark';
+          localStorage.setItem('theme', state.theme);
+          applyTheme();
+          updateUI();
+        });
+    }
 
   let lossHistory = [], accHistory = [];
   function drawLossAccGraph() {
