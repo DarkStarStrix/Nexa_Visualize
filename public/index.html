@@ -6,13 +6,88 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     :root {
-      --bg-dark: #ffffff; --bg-panel: rgba(20, 20, 25, 0.9); --border-color: #444;
-      --text-light: #eee; --text-med: #ccc; --text-dark: #aaa;
-      --cyan: #22d3ee; --blue: #3b82f6; --purple: #a855f7; --green: #22c55e; --red: #ef4444;
+      --bg-dark: #0a0a0a;
+      --bg-panel: rgba(20, 20, 25, 0.9);
+      --border-color: #444;
+      --text-light: #eee;
+      --text-med: #ccc;
+      --text-dark: #aaa;
+      --cyan: #22d3ee;
+      --blue: #3b82f6;
+      --purple: #a855f7;
+      --green: #22c55e;
+      --red: #ef4444;
+      --input-bg: #3f3f46;
+      --input-border: #52525b;
+      --layer-item-bg: #27272a;
     }
-    body { margin: 0; background: var(--bg-dark); color: var(--text-light); font-family: 'Segoe UI', sans-serif; overflow: hidden; }
+    body {
+      margin: 0;
+      background: var(--bg-dark);
+      color: var(--text-light);
+      font-family: 'Segoe UI', sans-serif;
+      overflow: hidden;
+    }
     #main3d { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; display: block; }
     .panel { position: absolute; background: var(--bg-panel); backdrop-filter: blur(10px); border-radius: 8px; }
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 34px;
+      height: 20px;
+    }
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 14px;
+      width: 14px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: .4s;
+      border-radius: 50%;
+    }
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: #ccc;
+      transition: .4s;
+      border-radius: 20px;
+    }
+    input:checked + .slider {
+      background-color: var(--purple);
+    }
+    input:focus + .slider {
+      box-shadow: 0 0 1px var(--purple);
+    }
+    input:checked + .slider:before {
+      transform: translateX(14px);
+    }
+    body.light-mode {
+      --bg-dark: #f0f0f0;
+      --bg-panel: rgba(255, 255, 255, 0.9);
+      --border-color: #ddd;
+      --text-light: #333;
+      --text-med: #555;
+      --text-dark: #777;
+      --cyan: #0891b2;
+      --blue: #2563eb;
+      --purple: #7e22ce;
+      --green: #15803d;
+      --red: #b91c1c;
+      --input-bg: #e0e0e0;
+      --input-border: #b0b0b0;
+      --layer-item-bg: #e5e5e5;
+    }
     #header-panel { top: 1rem; left: 1rem; padding: 0.75rem; }
     #header-panel h2 { margin: 0 0 0.5rem 0; font-size: 1.125rem; font-weight: bold; color: var(--cyan); }
     #status-badge { font-size: 0.75rem; padding: 0.25rem 0.5rem; border-radius: 4px; font-weight: bold; }
@@ -55,6 +130,25 @@
     label { display: block; font-size: 0.75rem; margin-bottom: 0.25rem; }
     input, select { width: 100%; background: #3f3f46; border: 1px solid #52525b; color: #fff; border-radius: 4px; padding: 0.25rem; box-sizing: border-box; font-size: 0.75rem; }
     .hidden { display: none; }
+    .panel { background: var(--bg-panel); backdrop-filter: blur(10px); border-radius: 8px; }
+    #header-panel h2 { color: var(--cyan); }
+    #status-badge { /* ... */ }
+    #header-panel .text-xs { color: var(--text-med); }
+    .tab-buttons { border-top: 1px solid var(--border-color); }
+    .tab-buttons button { color: var(--text-light); }
+    .tab-buttons button.inactive { background-color: var(--input-bg); }
+    .tab-buttons button.inactive:hover { background-color: var(--input-border); }
+
+    .btn { background: var(--input-bg); color: var(--text-light); border: none; border-radius: 4px; padding: 0.25rem 1rem; cursor: pointer; transition: background 0.2s; }
+    .btn:hover { background: var(--input-border); }
+    .btn:disabled { background-color: var(--input-border); cursor: not-allowed; }
+
+    #status-panel { /* ... */ }
+    #status-panel .text-xs { color: var(--text-dark); }
+    #panel-details-container { border-top: 1px solid var(--border-color); }
+    .layer-item { background: var(--layer-item-bg); }
+    label { /* ... */ }
+    input, select { background: var(--input-bg); border: 1px solid var(--input-border); color: var(--text-light); }
   </style>
   <script src="https://cdn.jsdelivr.net/npm/three@0.153.0/build/three.min.js"></script>
 </head>
