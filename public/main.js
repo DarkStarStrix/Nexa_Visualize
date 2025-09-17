@@ -239,7 +239,7 @@ function applyTheme() {
         </div>
       </div>`;
     });
-    html += `</div><button id="add-layer-btn" class="btn" style="width: 100%; margin-top: 0.75rem; background-color: var(--purple);">Add Hidden Layer</button>`;
+    html += `</div><button id="add-layer-btn" class="btn" style="width: 100%; margin-top: 0.75rem; background-color: var(--purple); color: #fff;">Add Hidden Layer</button>`;
     archPanel.innerHTML = html;
   }
 
@@ -296,13 +296,17 @@ function applyTheme() {
     }
 
   let lossHistory = [], accHistory = [];
-  function drawLossAccGraph() {
+function drawLossAccGraph() {
       const ctx = lossAccCanvas.getContext('2d');
       const w = lossAccCanvas.width, h = lossAccCanvas.height;
       ctx.clearRect(0, 0, w, h);
 
+      const computedStyle = getComputedStyle(document.documentElement);
+      const redColor = computedStyle.getPropertyValue('--red').trim();
+      const greenColor = computedStyle.getPropertyValue('--green').trim();
+
       // Draw Loss (Red)
-      ctx.strokeStyle = 'var(--red)';
+      ctx.strokeStyle = redColor;
       ctx.lineWidth = 2;
       ctx.beginPath();
       lossHistory.forEach((v, i) => {
@@ -313,7 +317,7 @@ function applyTheme() {
       ctx.stroke();
 
       // Draw Accuracy (Green)
-      ctx.strokeStyle = 'var(--green)';
+      ctx.strokeStyle = greenColor;
       ctx.beginPath();
       accHistory.forEach((v, i) => {
           const x = (i / Math.max(1, accHistory.length - 1)) * w;
@@ -336,10 +340,22 @@ function applyTheme() {
   document.getElementById('param-btn').addEventListener('click', () => handlePanelToggle('parameters'));
   document.getElementById('opt-btn').addEventListener('click', () => handlePanelToggle('optimization'));
 	document.getElementById('settings-btn').addEventListener('click', () => handlePanelToggle('settings'));
-
-  document.getElementById('cam-auto-btn').addEventListener('click', () => { state.cameraMode = 'auto'; updateUI(); });
-  document.getElementById('cam-manual-btn').addEventListener('click', () => { state.cameraMode = 'manual'; updateUI(); });
   document.getElementById('speed-slider').addEventListener('input', e => { state.animationSpeed = parseFloat(e.target.value); updateUI(); });
+
+  const autoBtn = document.getElementById('cam-auto-btn');
+  const manualBtn = document.getElementById('cam-manual-btn');
+
+  if (state.cameraMode === 'auto') {
+    autoBtn.style.backgroundColor = 'var(--purple)';
+    autoBtn.style.color = '#fff';
+    manualBtn.style.backgroundColor = ''; // Resets to CSS default
+    manualBtn.style.color = '';
+  } else {
+    autoBtn.style.backgroundColor = '';
+    autoBtn.style.color = '';
+    manualBtn.style.backgroundColor = 'var(--purple)';
+    manualBtn.style.color = '#fff';
+  }
 
   panelDetailsContainer.addEventListener('click', e => {
     if (e.target.id === 'add-layer-btn') {
