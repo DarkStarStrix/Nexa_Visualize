@@ -176,6 +176,13 @@
     <!-- Main Controls -->
     <div class="controls-content" style="border-top: none;">
       <div class="controls-row">
+        <div class="flex items-center gap-2">
+          <span class="text-xs">Auto</span>
+          <label class="switch">
+            <input type="checkbox" id="camera-mode-toggle" ${state.cameraMode === 'manual' ? 'checked' : ''}>
+            <span class="slider round"></span>
+          </label>
+          <span class="text-xs">Manual</span>
         </div>
         <div class="flex items-center gap-1 text-xs">
           <span>Speed:</span>

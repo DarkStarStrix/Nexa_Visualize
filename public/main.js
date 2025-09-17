@@ -185,8 +185,6 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('stop-btn').classList.toggle('hidden', !state.isTraining);
     document.getElementById('settings-btn').classList.toggle('active', state.activePanel === 'settings');
     document.getElementById('start-btn').disabled = state.isTrainingComplete;
-    document.getElementById('cam-auto-btn').style.backgroundColor = state.cameraMode === 'auto' ? 'var(--purple)' : '#4b5563';
-    document.getElementById('cam-manual-btn').style.backgroundColor = state.cameraMode === 'manual' ? 'var(--purple)' : '#4b5563';
     document.getElementById('speed-value').textContent = `${state.animationSpeed.toFixed(1)}x`;
 
     document.getElementById('epoch-value').textContent = state.epoch;
@@ -201,6 +199,7 @@ document.addEventListener('DOMContentLoaded', () => {
     optPanel.classList.toggle('visible', state.activePanel === 'optimization');
     settingsPanel.classList.toggle('visible', state.activePanel === 'settings');
     panelDetailsContainer.style.display = state.activePanel ? 'block' : 'none';
+    document.getElementById('camera-mode-toggle').checked = state.cameraMode === 'manual';
   }
 
 function applyTheme() {
@@ -342,20 +341,13 @@ function drawLossAccGraph() {
 	document.getElementById('settings-btn').addEventListener('click', () => handlePanelToggle('settings'));
   document.getElementById('speed-slider').addEventListener('input', e => { state.animationSpeed = parseFloat(e.target.value); updateUI(); });
 
+  document.getElementById('camera-mode-toggle').addEventListener('change', e => {
+    state.cameraMode = e.target.checked ? 'manual' : 'auto';
+  });
+
+
   const autoBtn = document.getElementById('cam-auto-btn');
   const manualBtn = document.getElementById('cam-manual-btn');
-
-  if (state.cameraMode === 'auto') {
-    autoBtn.style.backgroundColor = 'var(--purple)';
-    autoBtn.style.color = '#fff';
-    manualBtn.style.backgroundColor = ''; // Resets to CSS default
-    manualBtn.style.color = '';
-  } else {
-    autoBtn.style.backgroundColor = '';
-    autoBtn.style.color = '';
-    manualBtn.style.backgroundColor = 'var(--purple)';
-    manualBtn.style.color = '#fff';
-  }
 
   panelDetailsContainer.addEventListener('click', e => {
     if (e.target.id === 'add-layer-btn') {
