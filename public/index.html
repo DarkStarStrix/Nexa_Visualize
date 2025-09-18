@@ -174,7 +174,27 @@
   <!-- Unified Control Panel -->
   <div id="controls-panel" class="panel" style="position: absolute; top: 1rem; right: 1rem; width: 320px;">
     <!-- Main Controls -->
-    <div class="controls-content" style="border-top: none;">
+    <div class="controls-content" style="border-top: none; padding-top: 0.5rem;">
+      <!-- Architecture Selector -->
+      <div style="margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.5rem;">
+        <label for="arch-type-select" class="text-xs" style="margin-bottom: 0; flex-shrink: 0;">Architecture:</label>
+        <select id="arch-type-select" style="width: 100%;">
+          <option value="fnn">Feedforward Neural Network</option>
+          <option value="transformer">Transformer</option>
+          <option value="cnn">Convolutional Neural Network</option>
+          <option value="rnn">Recurrent Neural Network</option>
+          <option value="lstm">LSTM</option>
+          <option value="gru">GRU</option>
+          <option value="moe">Mixture of Experts (MoE)</option>
+          <option value="gan">Generative Adversarial Network</option>
+        </select>
+        <div id="arch-loading-spinner" class="hidden" style="width: 22px; height: 22px; border: 3px solid var(--purple); border-top: 3px solid transparent; border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
+      </div>
+      <style>
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+        #arch-loading-spinner.hidden { display: none; }
+      </style>
+
       <div class="controls-row">
         <div class="flex items-center gap-2">
           <span class="text-xs">Auto</span>
@@ -221,7 +241,19 @@
           </div>
         </div>
       </div>
-      <div id="settings-panel" class="active-panel"></div>
+      <div id="settings-panel" class="active-panel">
+        <div style="margin-bottom: 0.5rem;">
+          <label>Theme:</label>
+          <div class="flex gap-2 items-center">
+            <span>Dark</span>
+            <label class="switch">
+              <input type="checkbox" id="theme-toggle">
+              <span class="slider round"></span>
+            </label>
+            <span>Light</span>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
