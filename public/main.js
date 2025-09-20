@@ -17,8 +17,12 @@ document.addEventListener('DOMContentLoaded', () => {
         { neurons: 6, activation: 'ReLU', name: 'Hidden 2' },
         { neurons: 3, activation: 'Softmax', name: 'Output' }
       ],
-      transformer: { encoderBlocks: 2, decoderBlocks: 2 },
-      cnn: { variant: 'LeNet', convLayers: 2, fcLayers: 2 }, // Default to LeNet
+      transformer: {
+        variant: 'encoder-decoder', // NEW: encoder-only, decoder-only, encoder-decoder
+        encoderBlocks: 2,
+        decoderBlocks: 2
+      },
+      cnn: { variant: 'LeNet', convLayers: 2, fcLayers: 2 },
       rnn: { timeSteps: 5, hiddenSize: 4 },
       lstm: { timeSteps: 4 },
       gru: { timeSteps: 4 },
@@ -291,16 +295,25 @@ document.addEventListener('DOMContentLoaded', () => {
   function createTransformerComponent(name, position, geometry, color, userData = {}) {
       const mat = new THREE.MeshPhongMaterial({ color, transparent: true, opacity: 0.85, shininess: 50 });
       const mesh = new THREE.Mesh(geometry, mat);
-      // Ensure bottom of mesh is at position.y
-      const height = geometry.parameters.height || 0;
+
+      // Handle different geometry types for height calculation
+      let height = 0;
+      if (geometry.parameters) {
+          height = geometry.parameters.height || geometry.parameters.radius || 1;
+      } else {
+          height = 1; // Default fallback
+      }
+
       mesh.position.set(position.x, position.y + height / 2, position.z);
 
       mesh.userData = { name, ...userData, base_y: position.y };
       scene.add(mesh);
       transformerObjects.push(mesh);
+
       if (name) {
-          const labelPos = position.clone();
-          labelPos.y += height + 0.5;
+          // Position label above the component's actual mesh position
+          const labelPos = mesh.position.clone();
+          labelPos.y += height / 2 + 0.4;
           createTextLabel(name, labelPos, 0.6);
       }
       return mesh;
@@ -351,390 +364,640 @@ document.addEventListener('DOMContentLoaded', () => {
       createCurvedConnection(new THREE.Vector3(x, ff_y - 0.5, 0), new THREE.Vector3(x, ff_y + 0.5, 0), 0xffff00, 2);
   }
 
-  function createTransformerNetwork() {
-      const { encoderBlocks, decoderBlocks } = state.architecture.transformer;
-      const enc_x = -8;
-      const dec_x = 8;
-      const y_base = 0; // Float above grid
+  // --- OUTLINE & DOTTED LINE HELPERS ---
+  function addOutline(mesh, color = 0xffff00, thickness = 0.08) {
+      // Add a slightly larger mesh with a basic material for outline
+      const outlineMat = new THREE.MeshBasicMaterial({
+          color,
+          side: THREE.BackSide,
+          transparent: true,
+          opacity: 0.7,
+          depthWrite: false
+      });
+      const outline = new THREE.Mesh(mesh.geometry.clone(), outlineMat);
+      outline.position.copy(mesh.position);
+      outline.scale.copy(mesh.scale).multiplyScalar(1 + thickness);
+      outline.renderOrder = 1;
+      scene.add(outline);
+      transformerObjects.push(outline);
+      return outline;
+  }
 
-      // Embeddings
-      createTransformerComponent('Input Embedding', new THREE.Vector3(enc_x, y_base - 6, 0), new THREE.BoxGeometry(3, 1, 1), 0xffb6c1, { type: 'embedding', stack: 'encoder' });
-      createTransformerComponent('Output Embedding', new THREE.Vector3(dec_x, y_base - 6, 0), new THREE.BoxGeometry(3, 1, 1), 0xffb6c1, { type: 'embedding', stack: 'decoder' });
+  function addDottedLine(start, end, color = 0xffffff, dashSize = 0.4, gapSize = 0.25) {
+      const points = [start, end];
+      const geometry = new THREE.BufferGeometry().setFromPoints(points);
+      // Use LineDashedMaterial for dotted/dashed lines
+      const material = new THREE.LineDashedMaterial({
+          color,
+          dashSize,
+          gapSize,
+          linewidth: 2,
+          transparent: true,
+          opacity: 0.7
+      });
+      const line = new THREE.Line(geometry, material);
+      line.computeLineDistances();
+      scene.add(line);
+      transformerObjects.push(line);
+      return line;
+  }
+
+  function addDottedBox(center, size, color, dashSize = 0.2, gapSize = 0.2) {
+      const halfSize = { x: size.x / 2, y: size.y / 2, z: size.z / 2 };
+      const corners = [
+          new THREE.Vector3(center.x - halfSize.x, center.y - halfSize.y, center.z - halfSize.z),
+          new THREE.Vector3(center.x + halfSize.x, center.y - halfSize.y, center.z - halfSize.z),
+          new THREE.Vector3(center.x + halfSize.x, center.y + halfSize.y, center.z - halfSize.z),
+          new THREE.Vector3(center.x - halfSize.x, center.y + halfSize.y, center.z - halfSize.z),
+          new THREE.Vector3(center.x - halfSize.x, center.y - halfSize.y, center.z + halfSize.z),
+          new THREE.Vector3(center.x + halfSize.x, center.y - halfSize.y, center.z + halfSize.z),
+          new THREE.Vector3(center.x + halfSize.x, center.y + halfSize.y, center.z + halfSize.z),
+          new THREE.Vector3(center.x - halfSize.x, center.y + halfSize.y, center.z + halfSize.z)
+      ];
+
+      // Edges
+      addDottedLine(corners[0], corners[1], color, dashSize, gapSize);
+      addDottedLine(corners[1], corners[2], color, dashSize, gapSize);
+      addDottedLine(corners[2], corners[3], color, dashSize, gapSize);
+      addDottedLine(corners[3], corners[0], color, dashSize, gapSize);
+      addDottedLine(corners[4], corners[5], color, dashSize, gapSize);
+      addDottedLine(corners[5], corners[6], color, dashSize, gapSize);
+      addDottedLine(corners[6], corners[7], color, dashSize, gapSize);
+      addDottedLine(corners[7], corners[4], color, dashSize, gapSize);
+      addDottedLine(corners[0], corners[4], color, dashSize, gapSize);
+      addDottedLine(corners[1], corners[5], color, dashSize, gapSize);
+      addDottedLine(corners[2], corners[6], color, dashSize, gapSize);
+      addDottedLine(corners[3], corners[7], color, dashSize, gapSize);
+  }
+
+  function createPositionalEncodingVisualization(centerX, baseY, stackType, stackHeight) {
+      // Single horizontal branch extending from the trunk
+      const branchLength = 2.5; // Length of the branch
+      const branchY = baseY - (stackHeight / 2) - 0.5; // Position at bottom of stack
+      const branchEndX = centerX + (stackType === 'encoder' ? -branchLength : branchLength); // Left for encoder, right for decoder
+
+      // Create the horizontal branch line
+      const lineGeometry = new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(centerX, branchY, 0),
+          new THREE.Vector3(branchEndX, branchY, 0)
+      ]);
+      const lineMaterial = new THREE.LineBasicMaterial({
+          color: 0xffd700,
+          linewidth: 3,
+          transparent: true,
+          opacity: 0.8
+      });
+      const line = new THREE.Line(lineGeometry, lineMaterial);
+      scene.add(line);
+      transformerObjects.push(line);
+
+      // Plus symbol at connection point (where branch meets trunk)
+      createTextLabel("+", new THREE.Vector3(centerX + (stackType === 'encoder' ? -0.3 : 0.3), branchY, 0), 0.5, "#ffd700");
+
+      // Marble at the end of the branch
+      const marbleGeometry = new THREE.SphereGeometry(0.15, 8, 6);
+      const marbleMaterial = new THREE.MeshPhongMaterial({
+          color: 0xffd700,
+          shininess: 100,
+          transparent: true,
+          opacity: 0.9
+      });
+      const marble = new THREE.Mesh(marbleGeometry, marbleMaterial);
+      marble.position.set(branchEndX, branchY, 0);
+      scene.add(marble);
+      transformerObjects.push(marble);
+      addOutline(marble, 0xffd700, 0.05);
+
+      // Label for positional encoding
+      createTextLabel("Positional Encoding", new THREE.Vector3(branchEndX, branchY - 0.5, 0), 0.5, "#ffd700");
+  }
+
+  // --- REFINED TRANSFORMER VISUALIZATION ---
+
+  function createEncoderOnlyTransformer() {
+      // Clear previous logic removed from here. createNetwork() handles it.
+
+      const { encoderBlocks } = state.architecture.transformer;
+      const enc_x = 0; // Centered
+      const y_base = 0;
+
+      // Input Embedding
+      const inputEmbed = createTransformerComponent('Input Embedding', new THREE.Vector3(enc_x, y_base - 7, 0), new THREE.BoxGeometry(3, 1, 1), 0xffb6c1, { type: 'embedding', stack: 'encoder' });
+      addOutline(inputEmbed, 0x22d3ee, 0.09);
+
+      // --- Unified Encoder Stack Outline ---
+      const encBlockHeight = 2.5;
+      const encBlockSpacing = 3.5;
+      const encStackHeight = (encoderBlocks - 1) * encBlockSpacing + encBlockHeight;
+      const encStackCenterY = y_base + ((encoderBlocks - 1) * encBlockSpacing) / 2;
+
+      addDottedBox(new THREE.Vector3(enc_x, encStackCenterY + 0.5, 0), {x: 3.2, y: encStackHeight + 1.5, z: 1.6}, 0x2196f3);
+      createTextLabel("Encoder Stack", new THREE.Vector3(enc_x, encStackCenterY + (encStackHeight + 1.5) / 2 + 1.0, 0), 0.8, "#22d3ee");
+
+      // Positional Encoding for Encoder
+      createPositionalEncodingVisualization(enc_x, encStackCenterY, 'encoder', encStackHeight);
 
       // Encoder Stack
+      let prevEncBlock = inputEmbed;
       for (let i = 0; i < encoderBlocks; i++) {
-          createEncoderLayer(enc_x, y_base - 2 + i * 5, i);
+          const y = y_base + i * encBlockSpacing;
+
+          const encBlockPos = new THREE.Vector3(enc_x, y + encBlockHeight / 2, 0);
+
+          // Solid connection from previous block
+          createCurvedConnection(prevEncBlock.position, encBlockPos, 0xffffff, 0);
+          prevEncBlock = { position: encBlockPos };
+
+          // Sub-components inside encoder block
+          const attn = createTransformerComponent('Multi-Head Self-Attention', new THREE.Vector3(enc_x, y + 0.3, 0), new THREE.BoxGeometry(1.8, 0.45, 0.5), 0xffa500, { type: 'attention', stack: 'encoder', layer: i });
+          const ff = createTransformerComponent('Feed Forward', new THREE.Vector3(enc_x, y + 1.5, 0), new THREE.BoxGeometry(1.8, 0.45, 0.5), 0x87ceeb, { type: 'ff', stack: 'encoder', layer: i });
+
+          attn.material.depthWrite = false;
+          ff.material.depthWrite = false;
+          addOutline(attn, 0xffa500, 0.05);
+          addOutline(ff, 0x87ceeb, 0.05);
+
+          // Internal flow line
+          createCurvedConnection(attn.position, ff.position, 0xcccccc, 1.0);
       }
 
-      // Decoder Stack
+      // Output Layers for Classification/Embedding
+      const last_encoder_y = y_base + (encoderBlocks - 1) * encBlockSpacing + encBlockHeight;
+      const pooler = createTransformerComponent('Pooler', new THREE.Vector3(enc_x, last_encoder_y + 2.0, 0), new THREE.BoxGeometry(2, 0.8, 0.8), 0x808080, { type: 'pooler' });
+      const classifier = createTransformerComponent('Classification Head', new THREE.Vector3(enc_x, last_encoder_y + 4.0, 0), new THREE.SphereGeometry(0.6, 16, 12), 0x32cd32, { type: 'classifier' });
+
+      createCurvedConnection(prevEncBlock.position, pooler.position, 0xffffff, 0);
+      createCurvedConnection(pooler.position, classifier.position, 0xffffff, 0);
+
+      addOutline(pooler, 0x808080, 0.06);
+      addOutline(classifier, 0x32cd32, 0.06);
+
+      createTextLabel("Classification Output", new THREE.Vector3(enc_x, last_encoder_y + 5.5, 0), 0.7, "#22c55e");
+  }
+
+  function createDecoderOnlyTransformer() {
+      // Clear previous logic removed from here. createNetwork() handles it.
+
+      const { decoderBlocks } = state.architecture.transformer;
+      const dec_x = 0; // Centered
+      const y_base = 0;
+
+      // Input/Output Embedding
+      const outputEmbed = createTransformerComponent('Token Embedding', new THREE.Vector3(dec_x, y_base - 7, 0), new THREE.BoxGeometry(3, 1, 1), 0xffb6c1, { type: 'embedding', stack: 'decoder' });
+      addOutline(outputEmbed, 0x22d3ee, 0.09);
+
+      // --- Unified Decoder Stack Outline ---
+      const decBlockHeight = 3.0;
+      const decBlockSpacing = 4.0;
+      const decStackHeight = (decoderBlocks - 1) * decBlockSpacing + decBlockHeight;
+      const decStackCenterY = y_base + ((decoderBlocks - 1) * decBlockSpacing) / 2;
+
+      addDottedBox(new THREE.Vector3(dec_x, decStackCenterY + 0.5, 0), {x: 3.2, y: decStackHeight + 1.5, z: 1.6}, 0xa855f7);
+      createTextLabel("Decoder Stack", new THREE.Vector3(dec_x, decStackCenterY + (decStackHeight + 1.5) / 2 + 1.0, 0), 0.8, "#a855f7");
+
+      // Positional Encoding for Decoder
+      createPositionalEncodingVisualization(dec_x, decStackCenterY, 'decoder', decStackHeight);
+
+      // Decoder Stack (Decoder-only has only masked self-attention)
+      let decoderTops = []; // Bug fix: decoderTops was not defined
+      let prevDecBlock = outputEmbed;
       for (let i = 0; i < decoderBlocks; i++) {
-          createDecoderLayer(dec_x, y_base - 2 + i * 7, i);
+          const y = y_base + i * decBlockSpacing;
+
+          const decBlockPos = new THREE.Vector3(dec_x, y + decBlockHeight / 2, 0);
+          const decBlockTop = decBlockPos.clone().add(new THREE.Vector3(0, decBlockHeight / 2, 0));
+          decoderTops.push(decBlockTop);
+
+          // Solid connection from previous block
+          createCurvedConnection(prevDecBlock.position, decBlockPos, 0xffffff, 0);
+          prevDecBlock = { position: decBlockPos };
+
+          // Sub-components inside decoder block (No cross-attention in decoder-only)
+          const maskedAttn = createTransformerComponent('Masked Multi-Head Self-Attention', new THREE.Vector3(dec_x, y + 0.3, 0), new THREE.BoxGeometry(1.8, 0.45, 0.5), 0x9932cc, { type: 'masked_attention', stack: 'decoder', layer: i });
+          const ff = createTransformerComponent('Feed Forward', new THREE.Vector3(dec_x, y + 1.8, 0), new THREE.BoxGeometry(1.8, 0.45, 0.5), 0x87ceeb, { type: 'ff', stack: 'decoder', layer: i });
+
+          maskedAttn.material.depthWrite = false;
+          ff.material.depthWrite = false;
+          addOutline(maskedAttn, 0x9932cc, 0.05);
+          addOutline(ff, 0x87ceeb, 0.05);
+
+          // Internal flow lines
+          createCurvedConnection(maskedAttn.position, ff.position, 0xcccccc, 1.0);
+      }
+
+      // Output Layers for Language Modeling
+      const last_decoder_y = y_base + (decoderBlocks - 1) * decBlockSpacing + decBlockHeight;
+      const lmHead = createTransformerComponent('Language Model Head', new THREE.Vector3(dec_x, last_decoder_y + 2.0, 0), new THREE.BoxGeometry(2, 0.8, 0.8), 0x808080, { type: 'lm_head' });
+      const softmax = createTransformerComponent('Softmax', new THREE.Vector3(dec_x, last_decoder_y + 4.0, 0), new THREE.SphereGeometry(0.6, 16, 12), 0x32cd32, { type: 'softmax' });
+
+      createCurvedConnection(prevDecBlock.position, lmHead.position, 0xffffff, 0);
+      createCurvedConnection(lmHead.position, softmax.position, 0xffffff, 0);
+
+      addOutline(lmHead, 0x808080, 0.06);
+      addOutline(softmax, 0x32cd32, 0.06);
+
+      createTextLabel("Next Token Prediction", new THREE.Vector3(dec_x, last_decoder_y + 5.5, 0), 0.7, "#22c55e");
+  }
+
+  function createTransformerNetwork() {
+      const variant = state.architecture.transformer.variant;
+
+      switch(variant) {
+          case 'encoder-only':
+              createEncoderOnlyTransformer();
+              break;
+          case 'decoder-only':
+              createDecoderOnlyTransformer();
+              break;
+          case 'encoder-decoder':
+          default:
+              createEncoderDecoderTransformer();
+              break;
+      }
+  }
+
+  function createEncoderDecoderTransformer() {
+      // Clear previous logic removed from here. createNetwork() handles it.
+
+      const { encoderBlocks, decoderBlocks } = state.architecture.transformer;
+      const enc_x = -4;
+      const dec_x = 4;
+      const y_base = 0;
+
+      // Embeddings
+      const inputEmbed = createTransformerComponent('Input Embedding', new THREE.Vector3(enc_x, y_base - 7, 0), new THREE.BoxGeometry(3, 1, 1), 0xffb6c1, { type: 'embedding', stack: 'encoder' });
+      const outputEmbed = createTransformerComponent('Output Embedding', new THREE.Vector3(dec_x, y_base - 7, 0), new THREE.BoxGeometry(3, 1, 1), 0xffb6c1, { type: 'embedding', stack: 'decoder' });
+
+      addOutline(inputEmbed, 0x22d3ee, 0.09);
+      addOutline(outputEmbed, 0x22d3ee, 0.09);
+
+      // Draw dotted vertical lines to separate encoder/decoder
+      addDottedLine(
+          new THREE.Vector3(0, y_base - 12, -4),
+          new THREE.Vector3(0, y_base + 20, 4),
+          0xffffff, 0.3, 0.3
+      );
+
+      // --- Unified Encoder Stack Outline ---
+      const encBlockHeight = 2.5;
+      const encBlockSpacing = 3.5;
+      const encStackHeight = (encoderBlocks - 1) * encBlockSpacing + encBlockHeight;
+      const encStackCenterY = y_base + ((encoderBlocks - 1) * encBlockSpacing) / 2;
+
+      addDottedBox(new THREE.Vector3(enc_x, encStackCenterY + 0.5, 0), {x: 3.2, y: encStackHeight + 1.5, z: 1.6}, 0x2196f3);
+      createTextLabel("Encoder", new THREE.Vector3(enc_x, encStackCenterY + (encStackHeight + 1.5) / 2 + 1.0, 0), 0.8, "#22d3ee");
+
+      // Positional Encoding for Encoder
+      createPositionalEncodingVisualization(enc_x, encStackCenterY, 'encoder', encStackHeight);
+
+      // Encoder Stack
+      let encoderTops = [];
+      let prevEncBlock = inputEmbed;
+      for (let i = 0; i < encoderBlocks; i++) {
+          const y = y_base + i * encBlockSpacing;
+
+          const encBlockPos = new THREE.Vector3(enc_x, y + encBlockHeight / 2, 0);
+          const encBlockTop = encBlockPos.clone().add(new THREE.Vector3(0, encBlockHeight / 2, 0));
+          encoderTops.push(encBlockTop);
+
+          // Solid connection from previous block
+          createCurvedConnection(prevEncBlock.position, encBlockPos, 0xffffff, 0);
+          prevEncBlock = { position: encBlockPos };
+
+          const attn = createTransformerComponent('Multi-Head Attention', new THREE.Vector3(enc_x, y + 0.3, 0), new THREE.BoxGeometry(1.8, 0.45, 0.5), 0xffa500, { type: 'attention', stack: 'encoder', layer: i });
+          const ff = createTransformerComponent('Feed Forward', new THREE.Vector3(enc_x, y + 1.5, 0), new THREE.BoxGeometry(1.8, 0.45, 0.5), 0x87ceeb, { type: 'ff', stack: 'encoder', layer: i });
+
+          attn.material.depthWrite = false;
+          ff.material.depthWrite = false;
+          addOutline(attn, 0xffa500, 0.05);
+          addOutline(ff, 0x87ceeb, 0.05);
+
+          // Internal flow line
+          createCurvedConnection(attn.position, ff.position, 0xcccccc, 1.0);
+      }
+
+      // --- Unified Decoder Stack Outline ---
+      const decBlockHeight = 4.0;
+      const decBlockSpacing = 5.0;
+      const decStackHeight = (decoderBlocks - 1) * decBlockSpacing + decBlockHeight;
+      const decStackCenterY = y_base + ((decoderBlocks - 1) * decBlockSpacing) / 2;
+
+      addDottedBox(new THREE.Vector3(dec_x, decStackCenterY + 0.5, 0), {x: 3.2, y: decStackHeight + 1.5, z: 1.6}, 0xa855f7);
+      createTextLabel("Decoder", new THREE.Vector3(dec_x, decStackCenterY + (decStackHeight + 1.5) / 2 + 1.0, 0), 0.8, "#a855f7");
+
+      // Positional Encoding for Decoder
+      createPositionalEncodingVisualization(dec_x, decStackCenterY, 'decoder', decStackHeight);
+
+      // Decoder Stack
+      let decoderTops = [];
+      let prevDecBlock = outputEmbed;
+      for (let i = 0; i < decoderBlocks; i++) {
+          const y = y_base + i * decBlockSpacing;
+
+          const decBlockPos = new THREE.Vector3(dec_x, y + decBlockHeight / 2, 0);
+          const decBlockTop = decBlockPos.clone().add(new THREE.Vector3(0, decBlockHeight / 2, 0));
+          decoderTops.push(decBlockTop);
+
+          // Solid connection from previous block
+          createCurvedConnection(prevDecBlock.position, decBlockPos, 0xffffff, 0);
+          prevDecBlock = { position: decBlockPos };
+
+          const maskedAttn = createTransformerComponent('Masked MHA', new THREE.Vector3(dec_x, y + 0.3, 0), new THREE.BoxGeometry(1.8, 0.45, 0.5), 0x9932cc, { type: 'masked_attention', stack: 'decoder', layer: i });
+          const crossAttn = createTransformerComponent('Cross-Attention', new THREE.Vector3(dec_x, y + 1.3, 0), new THREE.BoxGeometry(1.8, 0.45, 0.5), 0xdc143c, { type: 'cross_attention', stack: 'decoder', layer: i });
+          const ff = createTransformerComponent('Feed Forward', new THREE.Vector3(dec_x, y + 2.3, 0), new THREE.BoxGeometry(1.8, 0.45, 0.5), 0x87ceeb, { type: 'ff', stack: 'decoder', layer: i });
+
+          maskedAttn.material.depthWrite = false;
+          crossAttn.material.depthWrite = false;
+          ff.material.depthWrite = false;
+          addOutline(maskedAttn, 0x9932cc, 0.05);
+          addOutline(crossAttn, 0xdc143c, 0.05);
+          addOutline(ff, 0x87ceeb, 0.05);
+
+          createCurvedConnection(maskedAttn.position, crossAttn.position, 0xcccccc, 1.0);
+          createCurvedConnection(crossAttn.position, ff.position, 0xcccccc, 1.0);
       }
 
       // Cross-Attention Connections
       for (let i = 0; i < Math.min(encoderBlocks, decoderBlocks); i++) {
-          const start_y = y_base - 2 + i * 5;
-          const end_y = y_base - 2 + i * 7 + 1.5;
-          const start = new THREE.Vector3(enc_x + 1.25, start_y, 0);
-          const end = new THREE.Vector3(dec_x - 1.25, end_y, 0);
-          const geo = new THREE.BufferGeometry().setFromPoints([start, end]);
-          const mat = new THREE.LineBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.6 });
-          const line = new THREE.Line(geo, mat);
-          scene.add(line);
-          transformerObjects.push(line);
+          const encTop = encoderTops[i];
+          const decCrossAttn = transformerObjects.find(o => o.userData.type === 'cross_attention' && o.userData.layer === i);
+          if (decCrossAttn) {
+              createCurvedConnection(
+                  new THREE.Vector3(encTop.x + 1.5, encTop.y, encTop.z),
+                  new THREE.Vector3(decCrossAttn.position.x - 1.5, decCrossAttn.position.y, decCrossAttn.position.z),
+                  0xff0000, -2
+              );
+          }
       }
 
       // Output Layers
-      const last_decoder_y = y_base - 2 + (decoderBlocks - 1) * 7 + 4;
-      createTransformerComponent('Linear', new THREE.Vector3(dec_x, last_decoder_y + 2, 0), new THREE.BoxGeometry(2, 0.8, 0.8), 0x808080, { type: 'linear' });
-      createTransformerComponent('Softmax', new THREE.Vector3(dec_x, last_decoder_y + 3.5, 0), new THREE.SphereGeometry(0.6, 16, 12), 0x32cd32, { type: 'softmax' });
+      const last_decoder_y = y_base + (decoderBlocks - 1) * decBlockSpacing + decBlockHeight;
+      const linear = createTransformerComponent('Linear', new THREE.Vector3(dec_x, last_decoder_y + 2.0, 0), new THREE.BoxGeometry(2, 0.8, 0.8), 0x808080, { type: 'linear' });
+      const softmax = createTransformerComponent('Softmax', new THREE.Vector3(dec_x, last_decoder_y + 4.0, 0), new THREE.SphereGeometry(0.6, 16, 12), 0x32cd32, { type: 'softmax' });
+
+      createCurvedConnection(prevDecBlock.position, linear.position, 0xffffff, 0);
+      createCurvedConnection(linear.position, softmax.position, 0xffffff, 0);
+
+      addOutline(linear, 0x808080, 0.06);
+      addOutline(softmax, 0x32cd32, 0.06);
+
+      createTextLabel("Output", new THREE.Vector3(dec_x, last_decoder_y + 5.5, 0), 0.7, "#22c55e");
   }
 
-  // --- REFINED CNN ARCHITECTURE BUILDERS ---
-
-  function createLeNet() {
-      let z = -15;
-      const y = -8; // Bedrock
-      let prevComp = null;
-      let layer = 0;
-
-      prevComp = createTransformerComponent('Input (32x32)', new THREE.Vector3(0, y, z), new THREE.BoxGeometry(6, 6, 0.5), 0x3b82f6, {type: 'conv', layer: layer++});
-      z += 6;
-      let currentComp = createTransformerComponent('C1: Conv', new THREE.Vector3(0, y, z), new THREE.BoxGeometry(5.5, 5.5, 1), 0xa855f7, {type: 'conv', layer: layer++});
-      createCurvedConnection(prevComp.position, currentComp.position, 0xcccccc, 0); prevComp = currentComp;
-      z += 5;
-      currentComp = createTransformerComponent('S2: Pool', new THREE.Vector3(0, y, z), new THREE.BoxGeometry(5, 5, 1), 0x22d3ee, {type: 'pool', layer: layer++});
-      createCurvedConnection(prevComp.position, currentComp.position, 0xcccccc, 0); prevComp = currentComp;
-      z += 6;
-      currentComp = createTransformerComponent('C3: Conv', new THREE.Vector3(0, y, z), new THREE.BoxGeometry(4, 4, 1.5), 0xa855f7, {type: 'conv', layer: layer++});
-      createCurvedConnection(prevComp.position, currentComp.position, 0xcccccc, 0); prevComp = currentComp;
-      z += 5;
-      currentComp = createTransformerComponent('S4: Pool', new THREE.Vector3(0, y, z), new THREE.BoxGeometry(3.5, 3.5, 1.5), 0x22d3ee, {type: 'pool', layer: layer++});
-      createCurvedConnection(prevComp.position, currentComp.position, 0xcccccc, 0); prevComp = currentComp;
-      z += 6;
-      currentComp = createTransformerComponent('C5: Conv', new THREE.Vector3(0, y, z), new THREE.BoxGeometry(3, 3, 2), 0xa855f7, {type: 'conv', layer: layer++});
-      createCurvedConnection(prevComp.position, currentComp.position, 0xcccccc, 0); prevComp = currentComp;
-      z += 5;
-      currentComp = createTransformerComponent('F6: FC', new THREE.Vector3(0, y, z), new THREE.BoxGeometry(1, 1, 3), 0x22c55e, {type: 'fc', layer: layer++});
-      createCurvedConnection(prevComp.position, currentComp.position, 0xcccccc, 0); prevComp = currentComp;
-      z += 4;
-      currentComp = createTransformerComponent('Output: FC', new THREE.Vector3(0, y, z), new THREE.BoxGeometry(1, 1, 2), 0xef4444, {type: 'output', layer: layer++});
-      createCurvedConnection(prevComp.position, currentComp.position, 0xcccccc, 0);
-  }
-
-  function createAlexNet() {
-      let z = -25;
-      const y = -8;
-      let prevComp = null;
-      let layer = 0;
-
-      prevComp = createTransformerComponent('Input (227x227)', new THREE.Vector3(0, y, z), new THREE.BoxGeometry(8, 8, 0.5), 0x3b82f6, {type: 'conv', layer: layer++});
-      z += 7;
-      let currentComp = createTransformerComponent('Conv 1', new THREE.Vector3(0, y, z), new THREE.BoxGeometry(7, 7, 2), 0xa855f7, {type: 'conv', layer: layer++});
-      createCurvedConnection(prevComp.position, currentComp.position, 0xcccccc, 0); prevComp = currentComp;
-      z += 5;
-      currentComp = createTransformerComponent('Pool 1', new THREE.Vector3(0, y, z), new THREE.BoxGeometry(6, 6, 2), 0x22d3ee, {type: 'pool', layer: layer++});
-      createCurvedConnection(prevComp.position, currentComp.position, 0xcccccc, 0); prevComp = currentComp;
-      z += 6;
-      currentComp = createTransformerComponent('Conv 2', new THREE.Vector3(0, y, z), new THREE.BoxGeometry(5, 5, 3), 0xa855f7, {type: 'conv', layer: layer++});
-      createCurvedConnection(prevComp.position, currentComp.position, 0xcccccc, 0); prevComp = currentComp;
-      z += 5;
-      currentComp = createTransformerComponent('Pool 2', new THREE.Vector3(0, y, z), new THREE.BoxGeometry(4, 4, 3), 0x22d3ee, {type: 'pool', layer: layer++});
-      createCurvedConnection(prevComp.position, currentComp.position, 0xcccccc, 0); prevComp = currentComp;
-      z += 5;
-      currentComp = createTransformerComponent('Conv 3', new THREE.Vector3(0, y, z), new THREE.BoxGeometry(3.5, 3.5, 4), 0xa855f7, {type: 'conv', layer: layer++});
-      createCurvedConnection(prevComp.position, currentComp.position, 0xcccccc, 0); prevComp = currentComp;
-      z += 4;
-      currentComp = createTransformerComponent('Conv 4', new THREE.Vector3(0, y, z), new THREE.BoxGeometry(3, 3, 4.5), 0xa855f7, {type: 'conv', layer: layer++});
-      createCurvedConnection(prevComp.position, currentComp.position, 0xcccccc, 0); prevComp = currentComp;
-      z += 4;
-      currentComp = createTransformerComponent('Conv 5', new THREE.Vector3(0, y, z), new THREE.BoxGeometry(2.5, 2.5, 5), 0xa855f7, {type: 'conv', layer: layer++});
-      createCurvedConnection(prevComp.position, currentComp.position, 0xcccccc, 0); prevComp = currentComp;
-      z += 5;
-      currentComp = createTransformerComponent('Pool 3', new THREE.Vector3(0, y, z), new THREE.BoxGeometry(2, 2, 5), 0x22d3ee, {type: 'pool', layer: layer++});
-      createCurvedConnection(prevComp.position, currentComp.position, 0xcccccc, 0); prevComp = currentComp;
-      z += 5;
-      currentComp = createTransformerComponent('FC 6', new THREE.Vector3(0, y, z), new THREE.BoxGeometry(1, 1, 5), 0x22c55e, {type: 'fc', layer: layer++});
-      createCurvedConnection(prevComp.position, currentComp.position, 0xcccccc, 0); prevComp = currentComp;
-      z += 5;
-      currentComp = createTransformerComponent('FC 7', new THREE.Vector3(0, y, z), new THREE.BoxGeometry(1, 1, 4), 0x22c55e, {type: 'fc', layer: layer++});
-      createCurvedConnection(prevComp.position, currentComp.position, 0xcccccc, 0); prevComp = currentComp;
-      z += 5;
-      currentComp = createTransformerComponent('Output', new THREE.Vector3(0, y, z), new THREE.BoxGeometry(1, 1, 3), 0xef4444, {type: 'output', layer: layer++});
-      createCurvedConnection(prevComp.position, currentComp.position, 0xcccccc, 0);
-  }
-
-  function createVGGNet() {
-      let z = -30;
-      const y = -8;
-      let layer = 0;
-      let prevComp = null;
-      let currentComp = null;
-
-      const addConvBlock = (count, size, depth, pool = true) => {
-          for (let i = 0; i < count; i++) {
-              currentComp = createTransformerComponent(`Conv`, new THREE.Vector3(0, y, z), new THREE.BoxGeometry(size, size, depth), 0xa855f7, {type: 'conv', layer: layer++});
-              if(prevComp) createCurvedConnection(prevComp.position, currentComp.position, 0xcccccc, 0);
-              prevComp = currentComp;
-              z += 3;
-          }
-          if (pool) {
-              currentComp = createTransformerComponent('Pool', new THREE.Vector3(0, y, z), new THREE.BoxGeometry(size * 0.8, size * 0.8, depth), 0x22d3ee, {type: 'pool', layer: layer++});
-              createCurvedConnection(prevComp.position, currentComp.position, 0xcccccc, 0);
-              prevComp = currentComp;
-              z += 5;
-          }
-      };
-
-      prevComp = createTransformerComponent('Input (224x224)', new THREE.Vector3(0, y, z), new THREE.BoxGeometry(8, 8, 0.5), 0x3b82f6, {type: 'conv', layer: layer++});
-      z += 6;
-
-      addConvBlock(2, 8, 1); // Block 1
-      addConvBlock(2, 7, 1.5); // Block 2
-      addConvBlock(3, 6, 2); // Block 3
-
-      // FC Layers
-      currentComp = createTransformerComponent('FC-1', new THREE.Vector3(0, y, z), new THREE.BoxGeometry(1, 1, 5), 0x22c55e, {type: 'fc', layer: layer++});
-      createCurvedConnection(prevComp.position, currentComp.position, 0xcccccc, 0); prevComp = currentComp;
-      z += 5;
-      currentComp = createTransformerComponent('FC-2', new THREE.Vector3(0, y, z), new THREE.BoxGeometry(1, 1, 4), 0x22c55e, {type: 'fc', layer: layer++});
-      createCurvedConnection(prevComp.position, currentComp.position, 0xcccccc, 0); prevComp = currentComp;
-      z += 5;
-      currentComp = createTransformerComponent('Output', new THREE.Vector3(0, y, z), new THREE.BoxGeometry(1, 1, 3), 0xef4444, {type: 'output', layer: layer++});
-      createCurvedConnection(prevComp.position, currentComp.position, 0xcccccc, 0);
-  }
-
-  function createResNet() {
-      let z = -20;
-      const y = -8;
-      const input = createTransformerComponent('Input', new THREE.Vector3(0, y, z), new THREE.BoxGeometry(8, 8, 0.5), 0x3b82f6, {type: 'conv', layer: 0});
-      z += 6;
-      let prevBlockOut = input;
-      for (let i = 0; i < 3; i++) {
-          const resBlock = createTransformerComponent(`ResBlock ${i+1}`, new THREE.Vector3(0, y, z), new THREE.BoxGeometry(7-i, 7-i, 2+i), 0xa855f7, {type: 'resblock', layer: i+1});
-          createCurvedConnection(prevBlockOut.position, resBlock.position, 0xcccccc, 0); // Main path
-          createCurvedConnection(prevBlockOut.position, resBlock.position, 0xffa500, 8); // Skip connection
-          prevBlockOut = resBlock;
-          z += 6;
-      }
-      createTransformerComponent('Global Pool', new THREE.Vector3(0, y, z), new THREE.SphereGeometry(1.5), 0x22d3ee, {type: 'pool', layer: 4});
-      z += 4;
-      createTransformerComponent('FC/Output', new THREE.Vector3(0, y, z), new THREE.BoxGeometry(1, 1, 3), 0xef4444, {type: 'output', layer: 5});
-  }
-
-  function createGoogLeNet() {
-      let z = -25;
-      const y = -8;
-      const input = createTransformerComponent('Input', new THREE.Vector3(0, y, z), new THREE.BoxGeometry(8, 8, 0.5), 0x3b82f6, {type: 'conv', layer: 0});
-      z += 8;
-      let prev_z = input.position.z;
-      let layer = 1;
-
-      for (let i = 0; i < 2; i++) {
-          const inceptionModule = new THREE.Group();
-          inceptionModule.position.z = z;
-          // Main path for connection
-          const mainBody = createTransformerComponent(null, new THREE.Vector3(0, y, 0), new THREE.BoxGeometry(0.1, 0.1, 0.1), 0xcccccc, {layer: layer++});
-          // 1x1 Conv
-          const branch1 = createTransformerComponent('1x1', new THREE.Vector3(-3.5, y, 0), new THREE.BoxGeometry(1, 6-i*2, 1), 0x22c55e, {});
-          // 1x1 -> 3x3 Conv
-          const branch2 = createTransformerComponent('3x3', new THREE.Vector3(-1.5, y, 0), new THREE.BoxGeometry(1.5, 6-i*2, 1.5), 0x3b82f6, {});
-          // 1x1 -> 5x5 Conv
-          const branch3 = createTransformerComponent('5x5', new THREE.Vector3(1, y, 0), new THREE.BoxGeometry(2, 6-i*2, 2), 0xa855f7, {});
-          // 3x3 Pool -> 1x1 Conv
-          const branch4 = createTransformerComponent('Pool', new THREE.Vector3(3.5, y, 0), new THREE.BoxGeometry(1, 6-i*2, 1), 0xef4444, {});
-
-          inceptionModule.add(mainBody, branch1, branch2, branch3, branch4);
-          scene.add(inceptionModule);
-          transformerObjects.push(inceptionModule, mainBody, branch1, branch2, branch3, branch4);
-          createTextLabel(`Inception ${i+1}`, new THREE.Vector3(0, y + 8, z));
-          createCurvedConnection(new THREE.Vector3(0, y, prev_z), new THREE.Vector3(0, y, z), 0xcccccc, 0);
-          prev_z = z;
-          z += 10;
-      }
-      createTransformerComponent('Global Avg Pool', new THREE.Vector3(0, y, z), new THREE.SphereGeometry(1.5), 0x22d3ee, {type: 'pool', layer: layer++});
-      createCurvedConnection(new THREE.Vector3(0, y, prev_z), new THREE.Vector3(0, y, z), 0xcccccc, 0);
-      prev_z = z;
-      z += 5;
-      createTransformerComponent('Output', new THREE.Vector3(0, y, z), new THREE.BoxGeometry(1, 1, 3), 0xef4444, {type: 'output', layer: layer++});
-      createCurvedConnection(new THREE.Vector3(0, y, prev_z), new THREE.Vector3(0, y, z), 0xcccccc, 0);
-  }
-
-  function createYOLONetwork() {
-      let z = -20;
-      const y = -8;
-      let layer = 0;
-      let prevComp = null;
-      let currentComp = null;
-
-      prevComp = createTransformerComponent('Input', new THREE.Vector3(0, y, z), new THREE.BoxGeometry(8, 8, 0.5), 0x3b82f6, {type: 'conv', layer: layer++});
-      z += 7;
-      currentComp = createTransformerComponent('Backbone (CSPDarknet53)', new THREE.Vector3(0, y, z), new THREE.BoxGeometry(6, 6, 4), 0xa855f7, {type: 'conv', layer: layer++});
-      createCurvedConnection(prevComp.position, currentComp.position, 0xcccccc, 0); prevComp = currentComp;
-      z += 7;
-      currentComp = createTransformerComponent('Neck (C2f)', new THREE.Vector3(0, y, z), new THREE.BoxGeometry(4, 4, 2), 0x22d3ee, {type: 'conv', layer: layer++});
-      createCurvedConnection(prevComp.position, currentComp.position, 0xcccccc, 0); prevComp = currentComp;
-      z += 6;
-      const { gridSize } = state.architecture.cnn; // Use CNN state for this now
-      const cellSize = 2.5;
-      const gridGroup = new THREE.Group();
-      gridGroup.position.z = z;
-      for (let i = 0; i < gridSize; i++) {
-          for (let j = 0; j < gridSize; j++) {
-              const x = (i - (gridSize-1)/2) * cellSize;
-              const y_pos = y + (j - (gridSize-1)/2) * cellSize;
-              const cell = createTransformerComponent(null, new THREE.Vector3(x, y_pos, 0), new THREE.PlaneGeometry(cellSize, cellSize), 0x444444, {type: 'grid_cell', gridX: i, gridY: j, layer: layer});
-              gridGroup.add(cell);
-          }
-      }
-      scene.add(gridGroup);
-      transformerObjects.push(gridGroup);
-      createTextLabel("Detection Head (Anchor-Free)", new THREE.Vector3(0, y + 5, z));
-  }
-
-  function createCNNNetwork() {
-      const variant = state.architecture.cnn.variant;
-      switch(variant) {
-          case 'LeNet': createLeNet(); break;
-          case 'AlexNet': createAlexNet(); break;
-          case 'VGGNet': createVGGNet(); break;
-          case 'ResNet': createResNet(); break;
-          case 'GoogLeNet': createGoogLeNet(); break;
-          case 'YOLO': createYOLONetwork(); break;
-          // VGG, MobileNet etc. would be added here
-          default: createLeNet(); // Fallback
-      }
-  }
-
-  function createRNNNetwork() {
-    const { timeSteps } = state.architecture.rnn;
-    const y_base = 0; // Float above grid
-    for (let t = 0; t < timeSteps; t++) {
-        const x = t * 4 - (timeSteps-1)*2;
-        const input = createTransformerComponent(`Input x_${t}`, new THREE.Vector3(x, y_base - 4, 0), new THREE.SphereGeometry(0.5), 0x3b82f6, {type: 'input', step: t});
-        const hidden = createTransformerComponent(`Cell h_${t}`, new THREE.Vector3(x, y_base, 0), new THREE.SphereGeometry(0.8), 0x22c55e, {type: 'hidden', step: t});
-        const output = createTransformerComponent(`Output y_${t}`, new THREE.Vector3(x, y_base + 4, 0), new THREE.SphereGeometry(0.5), 0xef4444, {type: 'output', step: t});
-
-        // Connections within a time step
-        createCurvedConnection(input.position, hidden.position, 0xcccccc, 0);
-        createCurvedConnection(hidden.position, output.position, 0xcccccc, 0);
-
-        if (t > 0) {
-            const prev_x = (t-1) * 4 - (timeSteps-1)*2;
-            createCurvedConnection(new THREE.Vector3(prev_x, y_base, 0), new THREE.Vector3(x, y_base, 0), 0xffa500, 1.5);
-        }
-    }
-  }
-
-  function createLSTMNetwork() {
-    const { timeSteps } = state.architecture.lstm;
-    const y_base = 0; // Float above grid
-    // Cell State "Conveyor Belt"
-    const cellStateGeo = new THREE.CylinderGeometry(0.3, 0.3, timeSteps * 4, 16);
-    const cellStateMesh = createTransformerComponent(null, new THREE.Vector3(0, y_base, 0), cellStateGeo, 0x2196F3, {type: 'cell_state'});
-    cellStateMesh.rotation.z = Math.PI / 2;
-    createTextLabel("Cell State (Memory)", new THREE.Vector3(0, y_base - 1, 0), 0.7);
-
-    for (let t = 0; t < timeSteps; t++) {
-        const x = t * 4 - (timeSteps-1)*2;
-        createTransformerComponent(`h_${t}`, new THREE.Vector3(x, y_base + 2.5, 0), new THREE.SphereGeometry(0.6), 0x4CAF50, {type: 'hidden', step: t});
-        // Gates
-        createTransformerComponent(null, new THREE.Vector3(x - 0.8, y_base + 1, 0), new THREE.BoxGeometry(0.6, 0.6, 0.2), 0xFF5722, {type: 'gate', gateType: 'forget', step: t});
-        createTransformerComponent(null, new THREE.Vector3(x, y_base + 1, 0), new THREE.BoxGeometry(0.6, 0.6, 0.2), 0x9C27B0, {type: 'gate', gateType: 'input', step: t});
-        createTransformerComponent(null, new THREE.Vector3(x + 0.8, y_base + 1, 0), new THREE.BoxGeometry(0.6, 0.6, 0.2), 0xFF9800, {type: 'gate', gateType: 'output', step: t});
-        if (t === 0) {
-            createTextLabel("F", new THREE.Vector3(x - 0.8, y_base + 1.8, 0), 0.5);
-            createTextLabel("I", new THREE.Vector3(x, y_base + 1.8, 0), 0.5);
-            createTextLabel("O", new THREE.Vector3(x + 0.8, y_base + 1.8, 0), 0.5);
-        }
-    }
-  }
-
-  function createGRUNetwork() {
-      const { timeSteps } = state.architecture.gru;
-      const y_base = 0; // Float above grid
-      for (let t = 0; t < timeSteps; t++) {
-          const x = t * 4 - (timeSteps - 1) * 2;
-          const hidden = createTransformerComponent(`h_${t}`, new THREE.Vector3(x, y_base, 0), new THREE.SphereGeometry(0.8), 0x607D8B, { type: 'hidden', step: t });
-          // Gates
-          const resetGate = createTransformerComponent(null, new THREE.Vector3(x - 1.2, y_base, 0), new THREE.BoxGeometry(0.6, 0.6, 0.2), 0xF44336, { type: 'gate', gateType: 'reset', step: t });
-          const updateGate = createTransformerComponent(null, new THREE.Vector3(x, y_base + 1.2, 0), new THREE.TorusGeometry(0.4, 0.15, 8, 12), 0x2196F3, { type: 'gate', gateType: 'update', step: t });
-          updateGate.rotation.x = Math.PI / 2;
-          if (t === 0) {
-              createTextLabel("Reset", resetGate.position.clone().add(new THREE.Vector3(0, 0.8, 0)), 0.5);
-              createTextLabel("Update", updateGate.position.clone().add(new THREE.Vector3(0, 0.8, 0)), 0.5);
-          }
-          if (t > 0) {
-              const prev_x = (t - 1) * 4 - (timeSteps - 1) * 2;
-              createCurvedConnection(new THREE.Vector3(prev_x, y_base, 0), new THREE.Vector3(x, y_base, 0), 0xffa500, 1.5);
-          }
-      }
-  }
-
-  function createMoENetwork() {
-      const { experts } = state.architecture.moe;
-      const radius = 6;
-      const y_base = 0; // Float above grid
-      // Central Gate
-      const gate = createTransformerComponent('Gating Network', new THREE.Vector3(0, y_base + 2, 0), new THREE.SphereGeometry(1), 0xFFD700, {type: 'gate'});
-      // Experts
-      for (let i = 0; i < experts; i++) {
-          const angle = (i / experts) * Math.PI * 2;
-          const pos = new THREE.Vector3(Math.cos(angle) * radius, y_base, Math.sin(angle) * radius);
-          const expert = createTransformerComponent(`Expert ${i+1}`, pos, new THREE.CylinderGeometry(0.8, 0.8, 2, 8), 0x3b82f6, {type: 'expert', id: i});
-          createCurvedConnection(gate.position, expert.position, 0xcccccc, 0);
-      }
-  }
-
-  function createGANNetwork() {
-      const y_base = 0; // Float above grid
-      createTransformerComponent('Generator', new THREE.Vector3(-8, y_base, 0), new THREE.ConeGeometry(2, 6, 8), 0x22c55e, {type: 'generator'});
-      createTransformerComponent('Discriminator', new THREE.Vector3(8, y_base, 0), new THREE.CylinderGeometry(2, 2, 4, 8), 0xef4444, {type: 'discriminator'});
-      createTextLabel("Latent Noise", new THREE.Vector3(-8, y_base - 2, 0), 0.7);
-      createTextLabel("Real/Fake Decision", new THREE.Vector3(8, y_base - 2, 0), 0.7);
-  }
-
+  // --- NETWORK CREATION DISPATCH ---
   function createNetwork() {
-    if (gridHelper) {
-        scene.remove(gridHelper);
-        gridHelper.dispose();
-        gridHelper = null;
-    }
+    // Clear existing network
     neurons.forEach(layer => layer.forEach(n => { scene.remove(n); n.geometry.dispose(); n.material.dispose(); }));
     connections.forEach(c => { scene.remove(c); c.geometry.dispose(); c.material.dispose(); });
     transformerObjects.forEach(obj => { scene.remove(obj); if(obj.geometry) obj.geometry.dispose(); if(obj.material) obj.material.dispose(); });
     particles.forEach(p => scene.remove(p));
+
     neurons = [];
     connections = [];
     transformerObjects = [];
     particles = [];
 
-    if (state.archType === 'transformer') createTransformerNetwork();
-    else if (state.archType === 'cnn') createCNNNetwork();
-    else if (state.archType === 'rnn') createRNNNetwork();
-    else if (state.archType === 'lstm') createLSTMNetwork();
-    else if (state.archType === 'gru') createGRUNetwork();
-    else if (state.archType === 'moe') createMoENetwork();
-    else if (state.archType === 'gan') createGANNetwork();
-    else {
+    // Get current architecture config
+    const currentArch = state.architecture[state.archType];
+
+    // Create standard flexible grid for all models
+    const gridSize = createStandardGrid(state.archType, currentArch);
+
+    // Dispatch to appropriate architecture builder
+    switch (state.archType) {
+      case 'transformer':
+        createTransformerNetwork();
+        break;
+      case 'cnn':
+        createCNNNetwork();
+        break;
+      case 'rnn':
+        createRNNNetwork();
+        break;
+      case 'lstm':
+        createLSTMNetwork();
+        break;
+      case 'gru':
+        createGRUNetwork();
+        break;
+      case 'moe':
+        createMoENetwork();
+        break;
+      case 'gan':
+        createGANNetwork();
+        break;
+      case 'fnn':
+      default:
         const layers = getCurrentLayerConfig();
         createGenericNetwork(layers);
+        break;
     }
 
-    // Dynamically adjust grid size
-    const box = new THREE.Box3().setFromObject(scene);
-    const size = box.getSize(new THREE.Vector3());
-    const gridSize = Math.max(size.x, size.z, 40) * 1.2;
-    gridHelper = new THREE.GridHelper(gridSize, gridSize / 2, 0x444444, 0x222222);
+    updateUI();
+  }
+
+  function calculateGridSize(archType, currentArch) {
+    let minSize = 20; // Default minimum
+    let maxDimension = 0;
+
+    switch(archType) {
+      case 'transformer':
+        // Calculate based on encoder/decoder positions and blocks
+        const encBlocks = currentArch.encoderBlocks || 0;
+        const decBlocks = currentArch.decoderBlocks || 0;
+        const maxBlocks = Math.max(encBlocks, decBlocks);
+        const width = currentArch.variant === 'encoder-decoder' ? 16 : 8; // Two sides or one
+        const height = maxBlocks * 5 + 15; // Block spacing + embeddings + output
+        maxDimension = Math.max(width, height);
+        break;
+
+      case 'cnn':
+        // CNN layers spread horizontally
+        const layerCount = getCNNLayerConfig(currentArch.variant).length;
+        const width_cnn = (layerCount + 2) * 3 + 10; // Layer spacing + input + padding
+        maxDimension = Math.max(width_cnn, 20);
+        break;
+
+      case 'rnn':
+      case 'lstm':
+      case 'gru':
+        // RNN unrolled across time steps
+        const timeSteps = currentArch.timeSteps || 5;
+        const width_rnn = timeSteps * 5 + 10; // Time step spacing + padding
+        maxDimension = Math.max(width_rnn, 20);
+        break;
+
+      case 'moe':
+        // Circular expert arrangement
+        const numExperts = currentArch.experts || 4;
+        const radius = Math.max(5, numExperts * 0.8);
+        maxDimension = Math.max(radius * 3, 20); // Diameter + padding
+        break;
+
+      case 'gan':
+        // Two networks side by side
+        maxDimension = Math.max(25, 20);
+        break;
+
+      case 'fnn':
+      default:
+        // FNN layers in sequence
+        const layers = getCurrentLayerConfig();
+        if (layers && layers.length > 0) {
+          const layerSpacing = layers.length * 5 + 10;
+          const maxNeuronGrid = Math.max(...layers.map(l => {
+            if (l && l.gridSize && Array.isArray(l.gridSize)) {
+              return Math.max(l.gridSize[0] || 1, l.gridSize[1] || 1) * 3;
+            }
+            return 3; // Default fallback
+          }));
+          maxDimension = Math.max(layerSpacing, maxNeuronGrid, 20);
+        } else {
+          maxDimension = 20; // Fallback if no layers
+        }
+        break;
+    }
+
+    // Ensure grid is always larger than content with padding
+    const gridSize = Math.ceil(maxDimension * 1.4);
+    return Math.max(gridSize, minSize);
+  }
+
+  function createStandardGrid(archType, currentArch) {
+    // Remove existing grid
+    if (gridHelper) {
+      scene.remove(gridHelper);
+      gridHelper.dispose();
+      gridHelper = null;
+    }
+
+    // Calculate appropriate grid size for the current architecture
+    const gridSize = calculateGridSize(archType, currentArch);
+
+    // Apply theme-appropriate colors
+    const isLight = state.theme === 'light';
+    const gridColor = isLight ? 0xaaaaaa : 0x444444;
+    const subGridColor = isLight ? 0xdddddd : 0x222222;
+
+    // Create new grid helper
+    gridHelper = new THREE.GridHelper(gridSize, Math.max(20, gridSize / 2), gridColor, subGridColor);
     gridHelper.position.y = -8;
     scene.add(gridHelper);
-    applyTheme(); // Re-apply theme to new grid
 
-    const layers = getCurrentLayerConfig(); // Used for camera distance calculation
-    const optimalDistance = calculateOptimalDistance(layers);
-    camState.targetDistance = optimalDistance;
-    camState.distance = optimalDistance;
-    updateUI();
+    return gridSize;
+  }
+
+  // --- CNN ARCHITECTURE BUILDERS ---
+  function createCNNNetwork() {
+    const variant = state.architecture.cnn.variant;
+    const y_base = -5; // Lower the model to be closer to the grid
+
+    // Input image
+    const inputImage = createTransformerComponent('Input Image', new THREE.Vector3(-15, y_base, 0), new THREE.BoxGeometry(4, 4, 0.3), 0x3b82f6, { type: 'input', layer: 0 });
+    addOutline(inputImage, 0x3b82f6, 0.05);
+
+    // CNN layers based on variant
+    let layerConfigs = getCNNLayerConfig(variant);
+    let lastPosition = inputImage.position.clone();
+
+    layerConfigs.forEach((config, index) => {
+      const x = -10 + index * 4; // Increase spacing
+      // Create a funnel effect by lowering the y position for deeper layers
+      const y = y_base - index * 0.5;
+      const component = createTransformerComponent(config.name, new THREE.Vector3(x, y, 0), config.geometry, config.color, { type: config.type, layer: index });
+      addOutline(component, config.color, 0.05);
+
+      createCurvedConnection(lastPosition, component.position, 0xffffff, 0);
+      lastPosition = component.position;
+    });
+
+    // Set camera distance based on grid size
+    const gridSize = calculateGridSize('cnn', state.architecture.cnn);
+    camState.targetDistance = Math.max(40, gridSize * 0.8);
+    camState.distance = camState.targetDistance;
+  }
+
+  function getCNNLayerConfig(variant) {
+    const configs = {
+      'LeNet': [
+        { name: 'Conv1 (6@28x28)', geometry: new THREE.BoxGeometry(3, 3, 1), color: 0xff6b6b, type: 'conv' },
+        { name: 'Pool1 (6@14x14)', geometry: new THREE.BoxGeometry(2, 2, 1), color: 0x4ecdc4, type: 'pool' },
+        { name: 'Conv2 (16@10x10)', geometry: new THREE.BoxGeometry(2.5, 2.5, 1.5), color: 0xff6b6b, type: 'conv' },
+        { name: 'Pool2 (16@5x5)', geometry: new THREE.BoxGeometry(1.5, 1.5, 1.5), color: 0x4ecdc4, type: 'pool' },
+        { name: 'FC1 (120)', geometry: new THREE.SphereGeometry(0.8), color: 0xfeca57, type: 'fc' },
+        { name: 'FC2 (84)', geometry: new THREE.SphereGeometry(0.6), color: 0xfeca57, type: 'fc' },
+        { name: 'Output (10)', geometry: new THREE.SphereGeometry(0.5), color: 0x48dbfb, type: 'output' }
+      ],
+      'AlexNet': [
+        { name: 'Conv1 (96@55x55)', geometry: new THREE.BoxGeometry(4, 4, 1), color: 0xff6b6b, type: 'conv' },
+        { name: 'Pool1 (96@27x27)', geometry: new THREE.BoxGeometry(3, 3, 1), color: 0x4ecdc4, type: 'pool' },
+        { name: 'Conv2 (256@27x27)', geometry: new THREE.BoxGeometry(3.5, 3.5, 1.5), color: 0xff6b6b, type: 'conv' },
+        { name: 'Pool2 (256@13x13)', geometry: new THREE.BoxGeometry(2.5, 2.5, 1.5), color: 0x4ecdc4, type: 'pool' },
+        { name: 'Conv3 (384@13x13)', geometry: new THREE.BoxGeometry(3, 3, 2), color: 0xff6b6b, type: 'conv' },
+        { name: 'Conv4 (384@13x13)', geometry: new THREE.BoxGeometry(3, 3, 2), color: 0xff6b6b, type: 'conv' },
+        { name: 'Conv5 (256@13x13)', geometry: new THREE.BoxGeometry(2.5, 2.5, 2), color: 0xff6b6b, type: 'conv' },
+        { name: 'Pool3 (256@6x6)', geometry: new THREE.BoxGeometry(2, 2, 2), color: 0x4ecdc4, type: 'pool' },
+        { name: 'FC1 (4096)', geometry: new THREE.SphereGeometry(1), color: 0xfeca57, type: 'fc' },
+        { name: 'FC2 (4096)', geometry: new THREE.SphereGeometry(0.8), color: 0xfeca57, type: 'fc' },
+        { name: 'Output (1000)', geometry: new THREE.SphereGeometry(0.6), color: 0x48dbfb, type: 'output' }
+      ],
+      'VGGNet': [
+        { name: 'Conv1 (64@224x224)', geometry: new THREE.BoxGeometry(3.5, 3.5, 0.5), color: 0xff6b6b, type: 'conv' },
+        { name: 'Conv2 (64@224x224)', geometry: new THREE.BoxGeometry(3.5, 3.5, 0.5), color: 0xff6b6b, type: 'conv' },
+        { name: 'Pool1 (64@112x112)', geometry: new THREE.BoxGeometry(2.5, 2.5, 0.5), color: 0x4ecdc4, type: 'pool' },
+        { name: 'Conv3 (128@112x112)', geometry: new THREE.BoxGeometry(3, 3, 1), color: 0xff6b6b, type: 'conv' },
+        { name: 'Conv4 (128@112x112)', geometry: new THREE.BoxGeometry(3, 3, 1), color: 0xff6b6b, type: 'conv' },
+        { name: 'Pool2 (128@56x56)', geometry: new THREE.BoxGeometry(2, 2, 1), color: 0x4ecdc4, type: 'pool' },
+        { name: 'FC1 (4096)', geometry: new THREE.SphereGeometry(1), color: 0xfeca57, type: 'fc' },
+        { name: 'FC2 (4096)', geometry: new THREE.SphereGeometry(0.8), color: 0xfeca57, type: 'fc' },
+        { name: 'Output (1000)', geometry: new THREE.SphereGeometry(0.6), color: 0x48dbfb, type: 'output' }
+      ],
+      'ResNet': [
+        { name: 'Conv1 (64@112x112)', geometry: new THREE.BoxGeometry(3.5, 3.5, 0.8), color: 0xff6b6b, type: 'conv' },
+        { name: 'Pool1 (64@56x56)', geometry: new THREE.BoxGeometry(2.5, 2.5, 0.8), color: 0x4ecdc4, type: 'pool' },
+        { name: 'ResBlock1 (64@56x56)', geometry: new THREE.CylinderGeometry(1.5, 1.5, 2), color: 0x9c88ff, type: 'resblock' },
+        { name: 'ResBlock2 (128@28x28)', geometry: new THREE.CylinderGeometry(1.3, 1.3, 2), color: 0x9c88ff, type: 'resblock' },
+        { name: 'ResBlock3 (256@14x14)', geometry: new THREE.CylinderGeometry(1.1, 1.1, 2), color: 0x9c88ff, type: 'resblock' },
+        { name: 'ResBlock4 (512@7x7)', geometry: new THREE.CylinderGeometry(0.9, 0.9, 2), color: 0x9c88ff, type: 'resblock' },
+        { name: 'GAP (512)', geometry: new THREE.OctahedronGeometry(0.8), color: 0x4ecdc4, type: 'gap' },
+        { name: 'FC (1000)', geometry: new THREE.SphereGeometry(0.6), color: 0x48dbfb, type: 'output' }
+      ],
+      'GoogLeNet': [
+        { name: 'Conv1 (64@112x112)', geometry: new THREE.BoxGeometry(3.5, 3.5, 0.8), color: 0xff6b6b, type: 'conv' },
+        { name: 'Pool1 (64@56x56)', geometry: new THREE.BoxGeometry(2.5, 2.5, 0.8), color: 0x4ecdc4, type: 'pool' },
+        { name: 'Inception1', geometry: new THREE.DodecahedronGeometry(1.2), color: 0xffd93d, type: 'inception' },
+        { name: 'Inception2', geometry: new THREE.DodecahedronGeometry(1.1), color: 0xffd93d, type: 'inception' },
+        { name: 'Inception3', geometry: new THREE.DodecahedronGeometry(1.0), color: 0xffd93d, type: 'inception' },
+        { name: 'GAP (1024)', geometry: new THREE.OctahedronGeometry(0.8), color: 0x4ecdc4, type: 'gap' },
+        { name: 'FC (1000)', geometry: new THREE.SphereGeometry(0.6), color: 0x48dbfb, type: 'output' }
+      ],
+      'YOLO': [
+        { name: 'Backbone CNN', geometry: new THREE.BoxGeometry(4, 4, 2), color: 0xff6b6b, type: 'backbone' },
+        { name: 'Feature Pyramid', geometry: new THREE.ConeGeometry(1.5, 3), color: 0x9c88ff, type: 'fpn' },
+        { name: 'Detection Head', geometry: new THREE.CylinderGeometry(1.2, 1.2, 1.5), color: 0xffd93d, type: 'detection' },
+        { name: 'NMS', geometry: new THREE.OctahedronGeometry(0.8), color: 0x4ecdc4, type: 'nms' },
+        { name: 'Bounding Boxes', geometry: new THREE.BoxGeometry(2, 1.5, 0.5), color: 0x48dbfb, type: 'bbox' }
+      ]
+    };
+    return configs[variant] || configs['LeNet'];
+  }
+
+  function applyTheme() {
+    const isLight = state.theme === 'light';
+
+    const gridColor = isLight ? 0xaaaaaa : 0x444444;
+    const subGridColor = isLight ? 0xdddddd : 0x222222;
+    const sceneBgColor = isLight ? 0xf0f0f0 : 0x0a0a0a;
+
+    document.body.classList.toggle('light-mode', isLight);
+
+    scene.background.set(sceneBgColor);
+
+    // Update grid helper colors if it exists
+    if (gridHelper) {
+        const currentArch = state.architecture[state.archType];
+        createStandardGrid(state.archType, currentArch);
+    }
   }
 
   // --- UI RENDERING ---
@@ -746,7 +1009,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const currentArch = state.architecture[state.archType];
     const layerCount = Array.isArray(currentArch) ? currentArch.length : (currentArch.encoderBlocks || 0) + (currentArch.decoderBlocks || 0) + (currentArch.experts || 0) + (currentArch.depth || 0);
     const neuronCount = Array.isArray(currentArch) ? currentArch.reduce((s, l) => s + l.neurons, 0) : 'N/A';
-    document.getElementById('network-stats').textContent = `${layerCount} components • ${neuronCount} neurons`;
+    document.getElementById('network-stats').textContent = `${layerCount} components ��� ${neuronCount} neurons`;
 
     document.getElementById('start-btn').classList.toggle('hidden', state.isTraining);
     document.getElementById('stop-btn').classList.toggle('hidden', !state.isTraining);
@@ -772,121 +1035,130 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('camera-mode-toggle').checked = state.cameraMode === 'manual';
   }
 
-function applyTheme() {
-    const isLight = state.theme === 'light';
-
-    const gridColor = isLight ? 0xaaaaaa : 0x444444;
-    const subGridColor = isLight ? 0xdddddd : 0x222222;
-    const sceneBgColor = isLight ? 0xf0f0f0 : 0x0a0a0a;
-
-    document.body.classList.toggle('light-mode', isLight);
-
-    scene.background.set(sceneBgColor);
-
-    if (gridHelper) {
-        gridHelper.material.color.set(gridColor);
-        // The grid helper in three.js uses two materials. We can't easily access the second one.
-        // A full solution would be to create a custom grid. For now, this is a good approximation.
+  function getTransformerVariantDescription(variant) {
+    switch(variant) {
+      case 'encoder-only':
+        return '<strong>Encoder-only:</strong> Used for tasks like text classification and sentiment analysis (e.g., BERT). It processes the entire input sequence at once using bidirectional attention.';
+      case 'decoder-only':
+        return '<strong>Decoder-only:</strong> Used for generative tasks like text completion (e.g., GPT). It generates text sequentially, one token at a time, using masked self-attention.';
+      case 'encoder-decoder':
+        return '<strong>Encoder-Decoder:</strong> The original Transformer model, used for sequence-to-sequence tasks like machine translation. The encoder processes the input, and the decoder generates the output while attending to the encoder\'s output.';
+      default:
+        return '';
     }
   }
 
+  // --- PANEL RENDERING FUNCTIONS ---
   function renderArchitecturePanel() {
     let html = '';
     switch (state.archType) {
       case 'transformer':
+        const transformerOpts = ['encoder-decoder', 'encoder-only', 'decoder-only'];
         html = `<h3 style="color: var(--purple);">Transformer Architecture</h3>
           <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+            <div>
+              <label>Variant:</label>
+              <select id="transformer-variant-select" class="update-transformer-variant">
+                ${transformerOpts.map(opt => `<option value="${opt}" ${state.architecture.transformer.variant === opt ? 'selected' : ''}>${opt.charAt(0).toUpperCase() + opt.slice(1).replace('-', ' ')}</option>`).join('')}
+              </select>
+            </div>
+            ${state.architecture.transformer.variant === 'encoder-decoder' || state.architecture.transformer.variant === 'encoder-only' ? `
             <div><label>Encoder Blocks:</label><input type="number" min="1" max="6" value="${state.architecture.transformer.encoderBlocks}" class="update-arch-input" data-field="encoderBlocks"></div>
+            ` : ''}
+            ${state.architecture.transformer.variant === 'encoder-decoder' || state.architecture.transformer.variant === 'decoder-only' ? `
             <div><label>Decoder Blocks:</label><input type="number" min="1" max="6" value="${state.architecture.transformer.decoderBlocks}" class="update-arch-input" data-field="decoderBlocks"></div>
+            ` : ''}
+            <div style="margin-top: 0.5rem; padding: 0.5rem; background: var(--layer-item-bg); border-radius: 4px; font-size: 0.75rem;">
+              ${getTransformerVariantDescription(state.architecture.transformer.variant)}
+            </div>
           </div>`;
         break;
       case 'cnn':
-        const cnnOpts = ['LeNet', 'AlexNet', 'VGGNet', 'ResNet', 'GoogLeNet', 'YOLO'];
-        html = `<h3 style="color: var(--purple);">CNN Architecture</h3>
+        const cnnVariants = ['LeNet', 'AlexNet', 'VGGNet', 'ResNet', 'GoogLeNet', 'YOLO'];
+        html = `<h3 style="color: var(--red);">CNN Architecture</h3>
           <div style="display: flex; flex-direction: column; gap: 0.75rem;">
             <div>
               <label>Variant:</label>
               <select id="cnn-variant-select" class="update-cnn-variant">
-                ${cnnOpts.map(opt => `<option value="${opt}" ${state.architecture.cnn.variant === opt ? 'selected' : ''}>${opt}</option>`).join('')}
+                ${cnnVariants.map(variant => `<option value="${variant}" ${state.architecture.cnn.variant === variant ? 'selected' : ''}>${variant}</option>`).join('')}
               </select>
             </div>
-            ${state.architecture.cnn.variant === 'YOLO' ? `
-            <div><label>Grid Size:</label><input type="number" min="2" max="7" value="${state.architecture.cnn.gridSize || 3}" class="update-arch-input" data-field="gridSize"></div>
-            ` : ''}
           </div>`;
         break;
       case 'rnn':
       case 'lstm':
       case 'gru':
-        const archName = state.archType.toUpperCase();
-        html = `<h3 style="color: var(--purple);">${archName} Architecture</h3>
+        html = `<h3 style="color: var(--purple);">RNN Architecture</h3>
           <div style="display: flex; flex-direction: column; gap: 0.75rem;">
-            <div><label>Time Steps:</label><input type="number" min="2" max="10" value="${state.architecture[state.archType].timeSteps}" class="update-arch-input" data-field="timeSteps"></div>
+            <div><label>Time Steps:</label><input type="number" min="3" max="10" value="${state.architecture[state.archType].timeSteps}" class="update-arch-input" data-field="timeSteps"></div>
           </div>`;
         break;
       case 'moe':
-        html = `<h3 style="color: var(--purple);">Mixture of Experts Architecture</h3>
+        html = `<h3 style="color: var(--green);">Mixture of Experts</h3>
           <div style="display: flex; flex-direction: column; gap: 0.75rem;">
-            <div><label>Number of Experts:</label><input type="number" min="2" max="8" value="${state.architecture.moe.experts}" class="update-arch-input" data-field="experts"></div>
+            <div><label>Experts:</label><input type="number" min="2" max="8" value="${state.architecture.moe.experts}" class="update-arch-input" data-field="experts"></div>
           </div>`;
         break;
       case 'gan':
-        html = `<h3 style="color: var(--purple);">GAN Architecture</h3>
-          <p class="text-xs" style="color: var(--text-med);">Structure is fixed for visualization.</p>`;
-        break;
-      case 'yolo': // This case is now removed from dropdown, but we keep it clean.
-        html = ``;
-        break;
-      case 'unet':
-        html = `<h3 style="color: var(--purple);">U-Net Architecture</h3>
+        html = `<h3 style="color: var(--cyan);">GAN Architecture</h3>
           <div style="display: flex; flex-direction: column; gap: 0.75rem;">
-            <div><label>Down/Up-sampling Depth:</label><input type="number" min="1" max="4" value="${state.architecture.unet.depth}" class="update-arch-input" data-field="depth"></div>
+            <div><label>Generator Layers:</label><input type="number" min="2" max="5" value="${state.architecture.gan.generatorLayers}" class="update-arch-input" data-field="generatorLayers"></div>
+            <div><label>Discriminator Layers:</label><input type="number" min="2" max="5" value="${state.architecture.gan.discriminatorLayers}" class="update-arch-input" data-field="discriminatorLayers"></div>
           </div>`;
         break;
       case 'fnn':
       default:
-        html = `<h3 style="color: var(--purple);">Network Architecture</h3><div class="space-y-2" style="display: flex; flex-direction: column; gap: 0.5rem;">`;
-        state.architecture.fnn.forEach((layer, index) => {
-          html += `<div class="layer-item">
-            <div class="flex items-center" style="justify-content: space-between; margin-bottom: 0.5rem;">
-              <span class="text-xs font-bold">${layer.name}</span>
-              ${index > 0 && index < state.architecture.fnn.length - 1 ? `<button class="remove-layer-btn" data-index="${index}" style="color: var(--red); background: none; border: none; font-size: 1.2rem; cursor: pointer;">&times;</button>` : ''}
-            </div>
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem;">
-              <div><label>Neurons:</label><input type="number" min="1" max="64" value="${layer.neurons}" class="update-layer-input" data-index="${index}" data-field="neurons"></div>
-              <div><label>Activation:</label><select class="update-layer-input" data-index="${index}" data-field="activation" ${index === 0 || index === state.architecture.fnn.length - 1 ? 'disabled' : ''}>
-                ${['ReLU', 'Sigmoid', 'Tanh', 'Linear', 'Softmax'].map(opt => `<option value="${opt}" ${layer.activation === opt ? 'selected' : ''}>${opt}</option>`).join('')}
-              </select></div>
-            </div>
+        html = `<h3 style="color: var(--blue);">Feedforward Network</h3>
+          <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+            ${state.architecture.fnn.map((layer, i) => `
+              <div class="layer-item">
+                <label>Layer ${i + 1}:</label>
+                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                  <input type="number" min="1" max="128" value="${layer.neurons}" data-index="${i}" data-field="neurons" class="update-layer-input" style="width: 4rem;">
+                  <select data-index="${i}" data-field="activation" class="update-layer-input">
+                    <option value="Linear" ${layer.activation === 'Linear' ? 'selected' : ''}>Linear</option>
+                    <option value="ReLU" ${layer.activation === 'ReLU' ? 'selected' : ''}>ReLU</option>
+                    <option value="Sigmoid" ${layer.activation === 'Sigmoid' ? 'selected' : ''}>Sigmoid</option>
+                    <option value="Tanh" ${layer.activation === 'Tanh' ? 'selected' : ''}>Tanh</option>
+                    <option value="Softmax" ${layer.activation === 'Softmax' ? 'selected' : ''}>Softmax</option>
+                  </select>
+                  <button class="remove-layer-btn" data-index="${i}" style="background: var(--red); color: white; border: none; padding: 0.25rem 0.5rem; border-radius: 4px; cursor: pointer;">Remove</button>
+                </div>
+              </div>
+            `).join('')}
+            <button id="add-layer-btn" style="background: var(--green); color: white; border: none; padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer; margin-top: 0.5rem;">Add Layer</button>
           </div>`;
-        });
-        html += `</div><button id="add-layer-btn" class="btn" style="width: 100%; margin-top: 0.75rem; background-color: var(--purple); color: #fff;">Add Hidden Layer</button>`;
+        break;
     }
     archPanel.innerHTML = html;
   }
 
   function renderParametersPanel() {
-    paramPanel.innerHTML = `<h3 style="color: var(--blue);">Training Parameters</h3>
+    let html = `<h3 style="color: var(--blue);">Training Parameters</h3>
       <div style="display: flex; flex-direction: column; gap: 0.75rem;">
-        <div><label>Epochs:</label><input type="number" step="10" min="10" max="1000" value="${state.trainingParams.epochs}" class="update-param-input" data-field="epochs"></div>
-        <div><label>Learning Rate:</label><input type="number" step="0.001" min="0.001" max="1" value="${state.trainingParams.learningRate}" class="update-param-input" data-field="learningRate"></div>
+        <div><label>Learning Rate:</label><input type="number" min="0.0001" max="0.1" step="0.0001" value="${state.trainingParams.learningRate}" data-field="learningRate" class="update-param-input"></div>
+        <div><label>Batch Size:</label><input type="number" min="8" max="128" value="${state.trainingParams.batchSize}" data-field="batchSize" class="update-param-input"></div>
+        <div><label>Epochs:</label><input type="number" min="10" max="500" value="${state.trainingParams.epochs}" data-field="epochs" class="update-param-input"></div>
         <div>
-          <label>Batch Size:</label>
-          <select class="update-param-input" data-field="batchSize" value="${state.trainingParams.batchSize}">
-            <option>16</option><option>32</option><option>64</option><option>128</option>
+          <label>Optimizer:</label>
+          <select data-field="optimizer" class="update-param-input">
+            <option value="Adam" ${state.trainingParams.optimizer === 'Adam' ? 'selected' : ''}>Adam</option>
+            <option value="SGD" ${state.trainingParams.optimizer === 'SGD' ? 'selected' : ''}>SGD</option>
+            <option value="RMSprop" ${state.trainingParams.optimizer === 'RMSprop' ? 'selected' : ''}>RMSprop</option>
           </select>
         </div>
-        <div><label>Optimizer:</label><select class="update-param-input" data-field="optimizer" value="${state.trainingParams.optimizer}">
-          <option>Adam</option><option>SGD</option><option>RMSprop</option><option>AdaGrad</option>
-        </select></div>
         <div>
           <label>Loss Function:</label>
-          <select class="update-param-input" data-field="lossFunction" value="${state.trainingParams.lossFunction}">
-            <option>CrossEntropy</option><option>MSE</option>
+          <select data-field="lossFunction" class="update-param-input">
+            <option value="CrossEntropy" ${state.trainingParams.lossFunction === 'CrossEntropy' ? 'selected' : ''}>CrossEntropy</option>
+            <option value="MSE" ${state.trainingParams.lossFunction === 'MSE' ? 'selected' : ''}>MSE</option>
+            <option value="MAE" ${state.trainingParams.lossFunction === 'MAE' ? 'selected' : ''}>MAE</option>
           </select>
         </div>
       </div>`;
+    paramPanel.innerHTML = html;
   }
+
   function renderOptimizationPanel() {
     if (state.activePanel !== 'optimization') return;
     document.getElementById('opt-info-optimizer').textContent = state.trainingParams.optimizer;
@@ -894,56 +1166,24 @@ function applyTheme() {
   }
 
   function renderSettingsPanel() {
-      const themeToggle = document.getElementById('theme-toggle');
-      if (themeToggle) {
-        themeToggle.checked = state.theme === 'light';
-        themeToggle.onchange = (e) => {
-            state.theme = e.target.checked ? 'light' : 'dark';
-            localStorage.setItem('theme', state.theme);
-            applyTheme();
-            updateUI();
-        };
-      }
-    }
-
-    function renderArchSpecificSettings() {
-        const archSpecificSettingsContainer = document.getElementById('arch-specific-settings-container');
-        if (!archSpecificSettingsContainer) return;
-        archSpecificSettingsContainer.innerHTML = '';
-        archSpecificSettingsContainer.style.display = 'none';
-    }
-
-  let lossHistory = [], accHistory = [];
-function drawLossAccGraph() {
-      const ctx = lossAccCanvas.getContext('2d');
-      const w = lossAccCanvas.width, h = lossAccCanvas.height;
-      ctx.clearRect(0, 0, w, h);
-
-      const computedStyle = getComputedStyle(document.documentElement);
-      const redColor = computedStyle.getPropertyValue('--red').trim();
-      const greenColor = computedStyle.getPropertyValue('--green').trim();
-
-      // Draw Loss (Red)
-      ctx.strokeStyle = redColor;
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      lossHistory.forEach((v, i) => {
-          const x = (i / Math.max(1, lossHistory.length - 1)) * w;
-          const y = h - v * h;
-          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-      });
-      ctx.stroke();
-
-      // Draw Accuracy (Green)
-      ctx.strokeStyle = greenColor;
-      ctx.beginPath();
-      accHistory.forEach((v, i) => {
-          const x = (i / Math.max(1, accHistory.length - 1)) * w;
-          const y = h - v * h;
-          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-      });
-      ctx.stroke();
+    let html = `
+      <div style="margin-bottom: 0.5rem;">
+        <label>Theme:</label>
+        <div class="flex gap-2 items-center">
+          <span>Dark</span>
+          <label class="switch">
+            <input type="checkbox" id="theme-toggle" ${state.theme === 'light' ? '' : 'checked'}>
+            <span class="slider round"></span>
+          </label>
+          <span>Light</span>
+        </div>
+      </div>
+    `;
+    settingsPanel.innerHTML = html;
   }
+
+  // --- DOM EVENT LISTENERS ---
+  // ...existing code...
 
   // --- EVENT HANDLING ---
   function handlePanelToggle(panel) {
@@ -994,8 +1234,9 @@ function drawLossAccGraph() {
         const { field } = e.target.dataset;
         const value = parseInt(e.target.value);
         if (state.architecture[state.archType]) {
-            // Special case for CNN properties which are now nested
-            if (state.archType === 'cnn') {
+            if (state.archType === 'transformer') {
+                state.architecture.transformer[field] = value;
+            } else if (state.archType === 'cnn') {
                 state.architecture.cnn[field] = value;
             } else if (['rnn', 'lstm', 'gru'].includes(state.archType)) {
                 state.architecture.rnn[field] = value;
@@ -1005,12 +1246,19 @@ function drawLossAccGraph() {
                 state.architecture[state.archType][field] = value;
             }
             createNetwork();
+            renderArchitecturePanel(); // Re-render panel after change
         }
     }
     // CNN Variant change
     if (e.target.id === 'cnn-variant-select') {
         state.architecture.cnn.variant = e.target.value;
         if (!state.architecture.cnn.gridSize) state.architecture.cnn.gridSize = 3; // Ensure gridSize exists for YOLO
+        createNetwork();
+        renderArchitecturePanel(); // Re-render to show/hide variant-specific options
+    }
+    // Transformer Variant change
+    if (e.target.id === 'transformer-variant-select') {
+        state.architecture.transformer.variant = e.target.value;
         createNetwork();
         renderArchitecturePanel(); // Re-render to show/hide variant-specific options
     }
