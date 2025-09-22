@@ -23,11 +23,16 @@ document.addEventListener('DOMContentLoaded', () => {
         decoderBlocks: 2
       },
       cnn: { variant: 'LeNet', convLayers: 2, fcLayers: 2 },
-      rnn: { timeSteps: 5, hiddenSize: 4 },
-      lstm: { timeSteps: 4 },
-      gru: { timeSteps: 4 },
-      moe: { experts: 4 },
-      gan: { generatorLayers: 3, discriminatorLayers: 3 },
+      moe: {
+        variant: 'ST-MoE',
+        expertLayers: [
+          { experts: 4, name: 'Layer 1' }
+        ],
+        top_k: 2,
+        expertUsage: [[0,0,0,0]],
+        gateValues: [[0,0,0,0]]
+      },
+      autoencoder: { encodingDim: 3 },
     },
     trainingParams: {
       learningRate: 0.01,
@@ -76,6 +81,8 @@ document.addEventListener('DOMContentLoaded', () => {
   let gridHelper = null;
 
   const lossAccCanvas = document.getElementById('loss-acc-canvas');
+  let lossHistory = [];
+  let accHistory = [];
 
   let neurons = [];
   let connections = [];
@@ -105,6 +112,114 @@ document.addEventListener('DOMContentLoaded', () => {
   }, { passive: false });
 
   // --- CORE 3D LOGIC ---
+
+  // --- OUTLINE & DOTTED LINE HELPERS ---
+  function addOutline(mesh, color = 0xffff00, thickness = 0.08) {
+      // Add a slightly larger mesh with a basic material for outline
+      const outlineMat = new THREE.MeshBasicMaterial({
+          color,
+          side: THREE.BackSide,
+          transparent: true,
+          opacity: 0.7,
+          depthWrite: false
+      });
+      const outline = new THREE.Mesh(mesh.geometry.clone(), outlineMat);
+      outline.position.copy(mesh.position);
+      outline.scale.copy(mesh.scale).multiplyScalar(1 + thickness);
+      outline.renderOrder = 1;
+      scene.add(outline);
+      transformerObjects.push(outline);
+      return outline;
+  }
+
+  function addDottedLine(start, end, color = 0xffffff, dashSize = 0.4, gapSize = 0.25) {
+      const points = [start, end];
+      const geometry = new THREE.BufferGeometry().setFromPoints(points);
+      // Use LineDashedMaterial for dotted/dashed lines
+      const material = new THREE.LineDashedMaterial({
+          color,
+          dashSize,
+          gapSize,
+          linewidth: 2,
+          transparent: true,
+          opacity: 0.7
+      });
+      const line = new THREE.Line(geometry, material);
+      line.computeLineDistances();
+      scene.add(line);
+      transformerObjects.push(line);
+      return line;
+  }
+
+  function addDottedBox(center, size, color, dashSize = 0.2, gapSize = 0.2) {
+      const halfSize = { x: size.x / 2, y: size.y / 2, z: size.z / 2 };
+      const corners = [
+          new THREE.Vector3(center.x - halfSize.x, center.y - halfSize.y, center.z - halfSize.z),
+          new THREE.Vector3(center.x + halfSize.x, center.y - halfSize.y, center.z - halfSize.z),
+          new THREE.Vector3(center.x + halfSize.x, center.y + halfSize.y, center.z - halfSize.z),
+          new THREE.Vector3(center.x - halfSize.x, center.y + halfSize.y, center.z - halfSize.z),
+          new THREE.Vector3(center.x - halfSize.x, center.y - halfSize.y, center.z + halfSize.z),
+          new THREE.Vector3(center.x + halfSize.x, center.y - halfSize.y, center.z + halfSize.z),
+          new THREE.Vector3(center.x + halfSize.x, center.y + halfSize.y, center.z + halfSize.z),
+          new THREE.Vector3(center.x - halfSize.x, center.y + halfSize.y, center.z + halfSize.z)
+      ];
+
+      // Edges
+      addDottedLine(corners[0], corners[1], color, dashSize, gapSize);
+      addDottedLine(corners[1], corners[2], color, dashSize, gapSize);
+      addDottedLine(corners[2], corners[3], color, dashSize, gapSize);
+      addDottedLine(corners[3], corners[0], color, dashSize, gapSize);
+      addDottedLine(corners[4], corners[5], color, dashSize, gapSize);
+      addDottedLine(corners[5], corners[6], color, dashSize, gapSize);
+      addDottedLine(corners[6], corners[7], color, dashSize, gapSize);
+      addDottedLine(corners[7], corners[4], color, dashSize, gapSize);
+      addDottedLine(corners[0], corners[4], color, dashSize, gapSize);
+      addDottedLine(corners[1], corners[5], color, dashSize, gapSize);
+      addDottedLine(corners[2], corners[6], color, dashSize, gapSize);
+      addDottedLine(corners[3], corners[7], color, dashSize, gapSize);
+  }
+
+  function createPositionalEncodingVisualization(centerX, baseY, stackType, stackHeight) {
+      // Single horizontal branch extending from the trunk
+      const branchLength = 2.5; // Length of the branch
+      const branchY = baseY - (stackHeight / 2) - 0.5; // Position at bottom of stack
+      const branchEndX = centerX + (stackType === 'encoder' ? -branchLength : branchLength); // Left for encoder, right for decoder
+
+      // Create the horizontal branch line
+      const lineGeometry = new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(centerX, branchY, 0),
+          new THREE.Vector3(branchEndX, branchY, 0)
+      ]);
+      const lineMaterial = new THREE.LineBasicMaterial({
+          color: 0xffd700,
+          linewidth: 3,
+          transparent: true,
+          opacity: 0.8
+      });
+      const line = new THREE.Line(lineGeometry, lineMaterial);
+      scene.add(line);
+      transformerObjects.push(line);
+
+      // Plus symbol at connection point (where branch meets trunk)
+      createTextLabel("+", new THREE.Vector3(centerX + (stackType === 'encoder' ? -0.3 : 0.3), branchY, 0), 0.5, "#ffd700");
+
+      // Marble at the end of the branch
+      const marbleGeometry = new THREE.SphereGeometry(0.15, 8, 6);
+      const marbleMaterial = new THREE.MeshPhongMaterial({
+          color: 0xffd700,
+          shininess: 100,
+          transparent: true,
+          opacity: 0.9
+      });
+      const marble = new THREE.Mesh(marbleGeometry, marbleMaterial);
+      marble.position.set(branchEndX, branchY, 0);
+      scene.add(marble);
+      transformerObjects.push(marble);
+      addOutline(marble, 0xffd700, 0.05);
+
+      // Label for positional encoding
+      createTextLabel("Positional Encoding", new THREE.Vector3(branchEndX, branchY - 0.5, 0), 0.5, "#ffd700");
+  }
 
   // --- ARCHITECTURE VISUALIZATION HELPERS ---
 
@@ -180,6 +295,23 @@ document.addEventListener('DOMContentLoaded', () => {
     }));
   }
 
+  function getAutoencoderConfig() {
+      const encodingDim = state.architecture.autoencoder.encodingDim;
+      const baseLayers = [
+          { name: 'Input', neurons: 12, activation: 'Linear' },
+          { name: 'Encoder 1', neurons: 8, activation: 'ReLU' },
+          { name: 'Encoding', neurons: encodingDim, activation: 'Linear' },
+          { name: 'Decoder 1', neurons: 8, activation: 'ReLU' },
+          { name: 'Output', neurons: 12, activation: 'Sigmoid' }
+      ];
+      const colors = [0x3b82f6, 0x22d3ee, 0xa855f7, 0x22d3ee, 0x3b82f6];
+      return baseLayers.map((layer, idx) => ({
+          ...layer,
+          color: colors[idx % colors.length],
+          gridSize: [2, Math.ceil(layer.neurons / 2), 1]
+      }));
+  }
+
   function getUNetConfig() {
     // Example: Input, down blocks, bottleneck, up blocks, output
     const numBlocks = state.architecture.unet.depth;
@@ -202,12 +334,9 @@ document.addEventListener('DOMContentLoaded', () => {
     switch (state.archType) {
       case 'transformer':
       case 'cnn':
-      case 'rnn':
-      case 'lstm':
-      case 'gru':
-      case 'gan':
         return []; // These have their own builders
       case 'moe': return getMoEConfig();
+      case 'autoencoder': return getAutoencoderConfig();
       case 'unet': return getUNetConfig();
       case 'fnn':
       default: return getFNNLayerConfig();
@@ -215,17 +344,14 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function calculateOptimalDistance(layers) {
-    if (state.archType === 'transformer' || state.archType === 'gan') {
+    if (state.archType === 'transformer') {
         return 50;
     }
     if (state.archType === 'cnn') {
         return 50;
     }
-    if (state.archType === 'rnn' || state.archType === 'lstm' || state.archType === 'gru') {
-        return 30;
-    }
     if (state.archType === 'moe') {
-        return 20;
+        return 25;
     }
     const networkWidth = layers.length * 5.0; // Adjusted for new spacing
     const networkHeight = Math.max(...layers.map(layer => layer.gridSize[1])) * 2;
@@ -364,245 +490,94 @@ document.addEventListener('DOMContentLoaded', () => {
       createCurvedConnection(new THREE.Vector3(x, ff_y - 0.5, 0), new THREE.Vector3(x, ff_y + 0.5, 0), 0xffff00, 2);
   }
 
-  // --- OUTLINE & DOTTED LINE HELPERS ---
-  function addOutline(mesh, color = 0xffff00, thickness = 0.08) {
-      // Add a slightly larger mesh with a basic material for outline
-      const outlineMat = new THREE.MeshBasicMaterial({
-          color,
-          side: THREE.BackSide,
-          transparent: true,
-          opacity: 0.7,
-          depthWrite: false
-      });
-      const outline = new THREE.Mesh(mesh.geometry.clone(), outlineMat);
-      outline.position.copy(mesh.position);
-      outline.scale.copy(mesh.scale).multiplyScalar(1 + thickness);
-      outline.renderOrder = 1;
-      scene.add(outline);
-      transformerObjects.push(outline);
-      return outline;
-  }
-
-  function addDottedLine(start, end, color = 0xffffff, dashSize = 0.4, gapSize = 0.25) {
-      const points = [start, end];
-      const geometry = new THREE.BufferGeometry().setFromPoints(points);
-      // Use LineDashedMaterial for dotted/dashed lines
-      const material = new THREE.LineDashedMaterial({
-          color,
-          dashSize,
-          gapSize,
-          linewidth: 2,
-          transparent: true,
-          opacity: 0.7
-      });
-      const line = new THREE.Line(geometry, material);
-      line.computeLineDistances();
-      scene.add(line);
-      transformerObjects.push(line);
-      return line;
-  }
-
-  function addDottedBox(center, size, color, dashSize = 0.2, gapSize = 0.2) {
-      const halfSize = { x: size.x / 2, y: size.y / 2, z: size.z / 2 };
-      const corners = [
-          new THREE.Vector3(center.x - halfSize.x, center.y - halfSize.y, center.z - halfSize.z),
-          new THREE.Vector3(center.x + halfSize.x, center.y - halfSize.y, center.z - halfSize.z),
-          new THREE.Vector3(center.x + halfSize.x, center.y + halfSize.y, center.z - halfSize.z),
-          new THREE.Vector3(center.x - halfSize.x, center.y + halfSize.y, center.z - halfSize.z),
-          new THREE.Vector3(center.x - halfSize.x, center.y - halfSize.y, center.z + halfSize.z),
-          new THREE.Vector3(center.x + halfSize.x, center.y - halfSize.y, center.z + halfSize.z),
-          new THREE.Vector3(center.x + halfSize.x, center.y + halfSize.y, center.z + halfSize.z),
-          new THREE.Vector3(center.x - halfSize.x, center.y + halfSize.y, center.z + halfSize.z)
-      ];
-
-      // Edges
-      addDottedLine(corners[0], corners[1], color, dashSize, gapSize);
-      addDottedLine(corners[1], corners[2], color, dashSize, gapSize);
-      addDottedLine(corners[2], corners[3], color, dashSize, gapSize);
-      addDottedLine(corners[3], corners[0], color, dashSize, gapSize);
-      addDottedLine(corners[4], corners[5], color, dashSize, gapSize);
-      addDottedLine(corners[5], corners[6], color, dashSize, gapSize);
-      addDottedLine(corners[6], corners[7], color, dashSize, gapSize);
-      addDottedLine(corners[7], corners[4], color, dashSize, gapSize);
-      addDottedLine(corners[0], corners[4], color, dashSize, gapSize);
-      addDottedLine(corners[1], corners[5], color, dashSize, gapSize);
-      addDottedLine(corners[2], corners[6], color, dashSize, gapSize);
-      addDottedLine(corners[3], corners[7], color, dashSize, gapSize);
-  }
-
-  function createPositionalEncodingVisualization(centerX, baseY, stackType, stackHeight) {
-      // Single horizontal branch extending from the trunk
-      const branchLength = 2.5; // Length of the branch
-      const branchY = baseY - (stackHeight / 2) - 0.5; // Position at bottom of stack
-      const branchEndX = centerX + (stackType === 'encoder' ? -branchLength : branchLength); // Left for encoder, right for decoder
-
-      // Create the horizontal branch line
-      const lineGeometry = new THREE.BufferGeometry().setFromPoints([
-          new THREE.Vector3(centerX, branchY, 0),
-          new THREE.Vector3(branchEndX, branchY, 0)
-      ]);
-      const lineMaterial = new THREE.LineBasicMaterial({
-          color: 0xffd700,
-          linewidth: 3,
-          transparent: true,
-          opacity: 0.8
-      });
-      const line = new THREE.Line(lineGeometry, lineMaterial);
-      scene.add(line);
-      transformerObjects.push(line);
-
-      // Plus symbol at connection point (where branch meets trunk)
-      createTextLabel("+", new THREE.Vector3(centerX + (stackType === 'encoder' ? -0.3 : 0.3), branchY, 0), 0.5, "#ffd700");
-
-      // Marble at the end of the branch
-      const marbleGeometry = new THREE.SphereGeometry(0.15, 8, 6);
-      const marbleMaterial = new THREE.MeshPhongMaterial({
-          color: 0xffd700,
-          shininess: 100,
-          transparent: true,
-          opacity: 0.9
-      });
-      const marble = new THREE.Mesh(marbleGeometry, marbleMaterial);
-      marble.position.set(branchEndX, branchY, 0);
-      scene.add(marble);
-      transformerObjects.push(marble);
-      addOutline(marble, 0xffd700, 0.05);
-
-      // Label for positional encoding
-      createTextLabel("Positional Encoding", new THREE.Vector3(branchEndX, branchY - 0.5, 0), 0.5, "#ffd700");
-  }
-
-  // --- REFINED TRANSFORMER VISUALIZATION ---
-
-  function createEncoderOnlyTransformer() {
-      // Clear previous logic removed from here. createNetwork() handles it.
-
-      const { encoderBlocks } = state.architecture.transformer;
-      const enc_x = 0; // Centered
+  function createEncoderDecoderTransformer() {
+      const { encoderBlocks, decoderBlocks } = state.architecture.transformer;
+      const enc_x = -2; // Moved closer
+      const dec_x = 5;  // Moved closer
       const y_base = 0;
 
-      // Input Embedding
+      // --- ENCODER ---
       const inputEmbed = createTransformerComponent('Input Embedding', new THREE.Vector3(enc_x, y_base - 7, 0), new THREE.BoxGeometry(3, 1, 1), 0xffb6c1, { type: 'embedding', stack: 'encoder' });
       addOutline(inputEmbed, 0x22d3ee, 0.09);
 
-      // --- Unified Encoder Stack Outline ---
       const encBlockHeight = 2.5;
       const encBlockSpacing = 3.5;
       const encStackHeight = (encoderBlocks - 1) * encBlockSpacing + encBlockHeight;
       const encStackCenterY = y_base + ((encoderBlocks - 1) * encBlockSpacing) / 2;
-
       addDottedBox(new THREE.Vector3(enc_x, encStackCenterY + 0.5, 0), {x: 3.2, y: encStackHeight + 1.5, z: 1.6}, 0x2196f3);
       createTextLabel("Encoder Stack", new THREE.Vector3(enc_x, encStackCenterY + (encStackHeight + 1.5) / 2 + 1.0, 0), 0.8, "#22d3ee");
-
-      // Positional Encoding for Encoder
       createPositionalEncodingVisualization(enc_x, encStackCenterY, 'encoder', encStackHeight);
 
-      // Encoder Stack
+      let encoderTops = [];
       let prevEncBlock = inputEmbed;
       for (let i = 0; i < encoderBlocks; i++) {
           const y = y_base + i * encBlockSpacing;
-
           const encBlockPos = new THREE.Vector3(enc_x, y + encBlockHeight / 2, 0);
-
-          // Solid connection from previous block
+          const encBlockTop = encBlockPos.clone().add(new THREE.Vector3(0, encBlockHeight / 2, 0));
+          encoderTops.push(encBlockTop);
           createCurvedConnection(prevEncBlock.position, encBlockPos, 0xffffff, 0);
           prevEncBlock = { position: encBlockPos };
 
-          // Sub-components inside encoder block
           const attn = createTransformerComponent('Multi-Head Self-Attention', new THREE.Vector3(enc_x, y + 0.3, 0), new THREE.BoxGeometry(1.8, 0.45, 0.5), 0xffa500, { type: 'attention', stack: 'encoder', layer: i });
           const ff = createTransformerComponent('Feed Forward', new THREE.Vector3(enc_x, y + 1.5, 0), new THREE.BoxGeometry(1.8, 0.45, 0.5), 0x87ceeb, { type: 'ff', stack: 'encoder', layer: i });
-
-          attn.material.depthWrite = false;
-          ff.material.depthWrite = false;
           addOutline(attn, 0xffa500, 0.05);
           addOutline(ff, 0x87ceeb, 0.05);
-
-          // Internal flow line
           createCurvedConnection(attn.position, ff.position, 0xcccccc, 1.0);
       }
 
-      // Output Layers for Classification/Embedding
-      const last_encoder_y = y_base + (encoderBlocks - 1) * encBlockSpacing + encBlockHeight;
-      const pooler = createTransformerComponent('Pooler', new THREE.Vector3(enc_x, last_encoder_y + 2.0, 0), new THREE.BoxGeometry(2, 0.8, 0.8), 0x808080, { type: 'pooler' });
-      const classifier = createTransformerComponent('Classification Head', new THREE.Vector3(enc_x, last_encoder_y + 4.0, 0), new THREE.SphereGeometry(0.6, 16, 12), 0x32cd32, { type: 'classifier' });
+      // --- DECODER ---
+      const outputEmbed = createTransformerComponent('Output Embedding', new THREE.Vector3(dec_x, y_base - 7, 0), new THREE.BoxGeometry(3, 1, 1), 0xffb6c1, { type: 'embedding', stack: 'decoder' });
+      addOutline(outputEmbed, 0xa855f7, 0.09);
 
-      createCurvedConnection(prevEncBlock.position, pooler.position, 0xffffff, 0);
-      createCurvedConnection(pooler.position, classifier.position, 0xffffff, 0);
-
-      addOutline(pooler, 0x808080, 0.06);
-      addOutline(classifier, 0x32cd32, 0.06);
-
-      createTextLabel("Classification Output", new THREE.Vector3(enc_x, last_encoder_y + 5.5, 0), 0.7, "#22c55e");
-  }
-
-  function createDecoderOnlyTransformer() {
-      // Clear previous logic removed from here. createNetwork() handles it.
-
-      const { decoderBlocks } = state.architecture.transformer;
-      const dec_x = 0; // Centered
-      const y_base = 0;
-
-      // Input/Output Embedding
-      const outputEmbed = createTransformerComponent('Token Embedding', new THREE.Vector3(dec_x, y_base - 7, 0), new THREE.BoxGeometry(3, 1, 1), 0xffb6c1, { type: 'embedding', stack: 'decoder' });
-      addOutline(outputEmbed, 0x22d3ee, 0.09);
-
-      // --- Unified Decoder Stack Outline ---
       const decBlockHeight = 3.0;
       const decBlockSpacing = 4.0;
       const decStackHeight = (decoderBlocks - 1) * decBlockSpacing + decBlockHeight;
       const decStackCenterY = y_base + ((decoderBlocks - 1) * decBlockSpacing) / 2;
-
       addDottedBox(new THREE.Vector3(dec_x, decStackCenterY + 0.5, 0), {x: 3.2, y: decStackHeight + 1.5, z: 1.6}, 0xa855f7);
       createTextLabel("Decoder Stack", new THREE.Vector3(dec_x, decStackCenterY + (decStackHeight + 1.5) / 2 + 1.0, 0), 0.8, "#a855f7");
-
-      // Positional Encoding for Decoder
       createPositionalEncodingVisualization(dec_x, decStackCenterY, 'decoder', decStackHeight);
 
-      // Decoder Stack (Decoder-only has only masked self-attention)
-      let decoderTops = []; // Bug fix: decoderTops was not defined
       let prevDecBlock = outputEmbed;
       for (let i = 0; i < decoderBlocks; i++) {
           const y = y_base + i * decBlockSpacing;
-
           const decBlockPos = new THREE.Vector3(dec_x, y + decBlockHeight / 2, 0);
-          const decBlockTop = decBlockPos.clone().add(new THREE.Vector3(0, decBlockHeight / 2, 0));
-          decoderTops.push(decBlockTop);
-
-          // Solid connection from previous block
           createCurvedConnection(prevDecBlock.position, decBlockPos, 0xffffff, 0);
-          prevDecBlock = { position: decBlockPos };
 
-          // Sub-components inside decoder block (No cross-attention in decoder-only)
-          const maskedAttn = createTransformerComponent('Masked Multi-Head Self-Attention', new THREE.Vector3(dec_x, y + 0.3, 0), new THREE.BoxGeometry(1.8, 0.45, 0.5), 0x9932cc, { type: 'masked_attention', stack: 'decoder', layer: i });
-          const ff = createTransformerComponent('Feed Forward', new THREE.Vector3(dec_x, y + 1.8, 0), new THREE.BoxGeometry(1.8, 0.45, 0.5), 0x87ceeb, { type: 'ff', stack: 'decoder', layer: i });
+          // Repositioned components to fit within the block outline
+          const maskedAttn = createTransformerComponent('Masked MHA', new THREE.Vector3(dec_x, y + 0.3, 0), new THREE.BoxGeometry(1.8, 0.45, 0.5), 0x9932cc, { type: 'masked_attention', stack: 'decoder', layer: i });
+          const crossAttn = createTransformerComponent('Cross-Attention', new THREE.Vector3(dec_x, y + 1.3, 0), new THREE.BoxGeometry(1.8, 0.45, 0.5), 0xdc143c, { type: 'cross_attention', stack: 'decoder', layer: i });
+          const ff = createTransformerComponent('Feed Forward', new THREE.Vector3(dec_x, y + 2.3, 0), new THREE.BoxGeometry(1.8, 0.45, 0.5), 0x87ceeb, { type: 'ff', stack: 'decoder', layer: i });
 
-          maskedAttn.material.depthWrite = false;
-          ff.material.depthWrite = false;
+          // The next connection should start from the top of the current block
+          prevDecBlock = { position: new THREE.Vector3(dec_x, y + decBlockHeight, 0) };
+
           addOutline(maskedAttn, 0x9932cc, 0.05);
+          addOutline(crossAttn, 0xdc143c, 0.05);
           addOutline(ff, 0x87ceeb, 0.05);
 
-          // Internal flow lines
-          createCurvedConnection(maskedAttn.position, ff.position, 0xcccccc, 1.0);
+          createCurvedConnection(maskedAttn.position, crossAttn.position, 0xcccccc, 1.0);
+          createCurvedConnection(crossAttn.position, ff.position, 0xcccccc, 1.0);
+
+          // Cross-attention connections
+          const encoderTop = encoderTops[Math.min(i, encoderTops.length - 1)];
+          addDottedLine(encoderTop, crossAttn.position, 0xffffff, 0.3, 0.2);
       }
 
-      // Output Layers for Language Modeling
+      // --- OUTPUT ---
       const last_decoder_y = y_base + (decoderBlocks - 1) * decBlockSpacing + decBlockHeight;
-      const lmHead = createTransformerComponent('Language Model Head', new THREE.Vector3(dec_x, last_decoder_y + 2.0, 0), new THREE.BoxGeometry(2, 0.8, 0.8), 0x808080, { type: 'lm_head' });
+      const linear = createTransformerComponent('Linear', new THREE.Vector3(dec_x, last_decoder_y + 2.0, 0), new THREE.BoxGeometry(2, 0.8, 0.8), 0x808080, { type: 'linear' });
       const softmax = createTransformerComponent('Softmax', new THREE.Vector3(dec_x, last_decoder_y + 4.0, 0), new THREE.SphereGeometry(0.6, 16, 12), 0x32cd32, { type: 'softmax' });
-
-      createCurvedConnection(prevDecBlock.position, lmHead.position, 0xffffff, 0);
-      createCurvedConnection(lmHead.position, softmax.position, 0xffffff, 0);
-
-      addOutline(lmHead, 0x808080, 0.06);
+      createCurvedConnection(prevDecBlock.position, linear.position, 0xffffff, 0);
+      createCurvedConnection(linear.position, softmax.position, 0xffffff, 0);
+      addOutline(linear, 0x808080, 0.06);
       addOutline(softmax, 0x32cd32, 0.06);
-
-      createTextLabel("Next Token Prediction", new THREE.Vector3(dec_x, last_decoder_y + 5.5, 0), 0.7, "#22c55e");
+      createTextLabel("Output", new THREE.Vector3(dec_x, last_decoder_y + 5.5, 0), 0.7, "#22c55e");
   }
 
+  // --- REFINED TRANSFORMER VISUALIZATION ---
   function createTransformerNetwork() {
-      const variant = state.architecture.transformer.variant;
-
-      switch(variant) {
+      const { variant } = state.architecture.transformer;
+      switch (variant) {
           case 'encoder-only':
               createEncoderOnlyTransformer();
               break;
@@ -614,134 +589,167 @@ document.addEventListener('DOMContentLoaded', () => {
               createEncoderDecoderTransformer();
               break;
       }
+      camState.targetDistance = calculateOptimalDistance([]);
+      camState.distance = camState.targetDistance;
   }
 
-  function createEncoderDecoderTransformer() {
-      // Clear previous logic removed from here. createNetwork() handles it.
-
-      const { encoderBlocks, decoderBlocks } = state.architecture.transformer;
-      const enc_x = -4;
-      const dec_x = 4;
+  function createEncoderOnlyTransformer() {
+      const { encoderBlocks } = state.architecture.transformer;
+      const enc_x = 0; // Centered
       const y_base = 0;
 
-      // Embeddings
       const inputEmbed = createTransformerComponent('Input Embedding', new THREE.Vector3(enc_x, y_base - 7, 0), new THREE.BoxGeometry(3, 1, 1), 0xffb6c1, { type: 'embedding', stack: 'encoder' });
-      const outputEmbed = createTransformerComponent('Output Embedding', new THREE.Vector3(dec_x, y_base - 7, 0), new THREE.BoxGeometry(3, 1, 1), 0xffb6c1, { type: 'embedding', stack: 'decoder' });
-
       addOutline(inputEmbed, 0x22d3ee, 0.09);
-      addOutline(outputEmbed, 0x22d3ee, 0.09);
 
-      // Draw dotted vertical lines to separate encoder/decoder
-      addDottedLine(
-          new THREE.Vector3(0, y_base - 12, -4),
-          new THREE.Vector3(0, y_base + 20, 4),
-          0xffffff, 0.3, 0.3
-      );
-
-      // --- Unified Encoder Stack Outline ---
       const encBlockHeight = 2.5;
       const encBlockSpacing = 3.5;
       const encStackHeight = (encoderBlocks - 1) * encBlockSpacing + encBlockHeight;
       const encStackCenterY = y_base + ((encoderBlocks - 1) * encBlockSpacing) / 2;
 
       addDottedBox(new THREE.Vector3(enc_x, encStackCenterY + 0.5, 0), {x: 3.2, y: encStackHeight + 1.5, z: 1.6}, 0x2196f3);
-      createTextLabel("Encoder", new THREE.Vector3(enc_x, encStackCenterY + (encStackHeight + 1.5) / 2 + 1.0, 0), 0.8, "#22d3ee");
-
-      // Positional Encoding for Encoder
+      createTextLabel("Encoder Stack", new THREE.Vector3(enc_x, encStackCenterY + (encStackHeight + 1.5) / 2 + 1.0, 0), 0.8, "#22d3ee");
       createPositionalEncodingVisualization(enc_x, encStackCenterY, 'encoder', encStackHeight);
 
-      // Encoder Stack
-      let encoderTops = [];
       let prevEncBlock = inputEmbed;
       for (let i = 0; i < encoderBlocks; i++) {
           const y = y_base + i * encBlockSpacing;
-
           const encBlockPos = new THREE.Vector3(enc_x, y + encBlockHeight / 2, 0);
-          const encBlockTop = encBlockPos.clone().add(new THREE.Vector3(0, encBlockHeight / 2, 0));
-          encoderTops.push(encBlockTop);
-
-          // Solid connection from previous block
           createCurvedConnection(prevEncBlock.position, encBlockPos, 0xffffff, 0);
           prevEncBlock = { position: encBlockPos };
 
-          const attn = createTransformerComponent('Multi-Head Attention', new THREE.Vector3(enc_x, y + 0.3, 0), new THREE.BoxGeometry(1.8, 0.45, 0.5), 0xffa500, { type: 'attention', stack: 'encoder', layer: i });
+          const attn = createTransformerComponent('Multi-Head Self-Attention', new THREE.Vector3(enc_x, y + 0.3, 0), new THREE.BoxGeometry(1.8, 0.45, 0.5), 0xffa500, { type: 'attention', stack: 'encoder', layer: i });
           const ff = createTransformerComponent('Feed Forward', new THREE.Vector3(enc_x, y + 1.5, 0), new THREE.BoxGeometry(1.8, 0.45, 0.5), 0x87ceeb, { type: 'ff', stack: 'encoder', layer: i });
-
-          attn.material.depthWrite = false;
-          ff.material.depthWrite = false;
           addOutline(attn, 0xffa500, 0.05);
           addOutline(ff, 0x87ceeb, 0.05);
-
-          // Internal flow line
           createCurvedConnection(attn.position, ff.position, 0xcccccc, 1.0);
       }
 
-      // --- Unified Decoder Stack Outline ---
-      const decBlockHeight = 4.0;
-      const decBlockSpacing = 5.0;
+      const last_encoder_y = y_base + (encoderBlocks - 1) * encBlockSpacing + encBlockHeight;
+      const pooler = createTransformerComponent('Pooler', new THREE.Vector3(enc_x, last_encoder_y + 2.0, 0), new THREE.BoxGeometry(2, 0.8, 0.8), 0x808080, { type: 'pooler' });
+      const classifier = createTransformerComponent('Classification Head', new THREE.Vector3(enc_x, last_encoder_y + 4.0, 0), new THREE.SphereGeometry(0.6, 16, 12), 0x32cd32, { type: 'classifier' });
+      createCurvedConnection(prevEncBlock.position, pooler.position, 0xffffff, 0);
+      createCurvedConnection(pooler.position, classifier.position, 0xffffff, 0);
+      addOutline(pooler, 0x808080, 0.06);
+      addOutline(classifier, 0x32cd32, 0.06);
+      createTextLabel("Classification Output", new THREE.Vector3(enc_x, last_encoder_y + 5.5, 0), 0.7, "#22c55e");
+  }
+
+  function createDecoderOnlyTransformer() {
+      const { decoderBlocks } = state.architecture.transformer;
+      const dec_x = 0; // Centered
+      const y_base = 0;
+
+      const outputEmbed = createTransformerComponent('Token Embedding', new THREE.Vector3(dec_x, y_base - 7, 0), new THREE.BoxGeometry(3, 1, 1), 0xffb6c1, { type: 'embedding', stack: 'decoder' });
+      addOutline(outputEmbed, 0x22d3ee, 0.09);
+
+      const decBlockHeight = 3.0;
+      const decBlockSpacing = 4.0;
       const decStackHeight = (decoderBlocks - 1) * decBlockSpacing + decBlockHeight;
       const decStackCenterY = y_base + ((decoderBlocks - 1) * decBlockSpacing) / 2;
 
       addDottedBox(new THREE.Vector3(dec_x, decStackCenterY + 0.5, 0), {x: 3.2, y: decStackHeight + 1.5, z: 1.6}, 0xa855f7);
-      createTextLabel("Decoder", new THREE.Vector3(dec_x, decStackCenterY + (decStackHeight + 1.5) / 2 + 1.0, 0), 0.8, "#a855f7");
-
-      // Positional Encoding for Decoder
+      createTextLabel("Decoder Stack", new THREE.Vector3(dec_x, decStackCenterY + (decStackHeight + 1.5) / 2 + 1.0, 0), 0.8, "#a855f7");
       createPositionalEncodingVisualization(dec_x, decStackCenterY, 'decoder', decStackHeight);
 
-      // Decoder Stack
-      let decoderTops = [];
       let prevDecBlock = outputEmbed;
       for (let i = 0; i < decoderBlocks; i++) {
           const y = y_base + i * decBlockSpacing;
-
           const decBlockPos = new THREE.Vector3(dec_x, y + decBlockHeight / 2, 0);
-          const decBlockTop = decBlockPos.clone().add(new THREE.Vector3(0, decBlockHeight / 2, 0));
-          decoderTops.push(decBlockTop);
-
-          // Solid connection from previous block
           createCurvedConnection(prevDecBlock.position, decBlockPos, 0xffffff, 0);
           prevDecBlock = { position: decBlockPos };
 
-          const maskedAttn = createTransformerComponent('Masked MHA', new THREE.Vector3(dec_x, y + 0.3, 0), new THREE.BoxGeometry(1.8, 0.45, 0.5), 0x9932cc, { type: 'masked_attention', stack: 'decoder', layer: i });
-          const crossAttn = createTransformerComponent('Cross-Attention', new THREE.Vector3(dec_x, y + 1.3, 0), new THREE.BoxGeometry(1.8, 0.45, 0.5), 0xdc143c, { type: 'cross_attention', stack: 'decoder', layer: i });
-          const ff = createTransformerComponent('Feed Forward', new THREE.Vector3(dec_x, y + 2.3, 0), new THREE.BoxGeometry(1.8, 0.45, 0.5), 0x87ceeb, { type: 'ff', stack: 'decoder', layer: i });
-
-          maskedAttn.material.depthWrite = false;
-          crossAttn.material.depthWrite = false;
-          ff.material.depthWrite = false;
+          const maskedAttn = createTransformerComponent('Masked Multi-Head Self-Attention', new THREE.Vector3(dec_x, y + 0.3, 0), new THREE.BoxGeometry(1.8, 0.45, 0.5), 0x9932cc, { type: 'masked_attention', stack: 'decoder', layer: i });
+          const ff = createTransformerComponent('Feed Forward', new THREE.Vector3(dec_x, y + 1.8, 0), new THREE.BoxGeometry(1.8, 0.45, 0.5), 0x87ceeb, { type: 'ff', stack: 'decoder', layer: i });
           addOutline(maskedAttn, 0x9932cc, 0.05);
-          addOutline(crossAttn, 0xdc143c, 0.05);
           addOutline(ff, 0x87ceeb, 0.05);
-
-          createCurvedConnection(maskedAttn.position, crossAttn.position, 0xcccccc, 1.0);
-          createCurvedConnection(crossAttn.position, ff.position, 0xcccccc, 1.0);
+          createCurvedConnection(maskedAttn.position, ff.position, 0xcccccc, 1.0);
       }
 
-      // Cross-Attention Connections
-      for (let i = 0; i < Math.min(encoderBlocks, decoderBlocks); i++) {
-          const encTop = encoderTops[i];
-          const decCrossAttn = transformerObjects.find(o => o.userData.type === 'cross_attention' && o.userData.layer === i);
-          if (decCrossAttn) {
-              createCurvedConnection(
-                  new THREE.Vector3(encTop.x + 1.5, encTop.y, encTop.z),
-                  new THREE.Vector3(decCrossAttn.position.x - 1.5, decCrossAttn.position.y, decCrossAttn.position.z),
-                  0xff0000, -2
-              );
-          }
-      }
-
-      // Output Layers
       const last_decoder_y = y_base + (decoderBlocks - 1) * decBlockSpacing + decBlockHeight;
-      const linear = createTransformerComponent('Linear', new THREE.Vector3(dec_x, last_decoder_y + 2.0, 0), new THREE.BoxGeometry(2, 0.8, 0.8), 0x808080, { type: 'linear' });
+      const lmHead = createTransformerComponent('Language Model Head', new THREE.Vector3(dec_x, last_decoder_y + 2.0, 0), new THREE.BoxGeometry(2, 0.8, 0.8), 0x808080, { type: 'lm_head' });
       const softmax = createTransformerComponent('Softmax', new THREE.Vector3(dec_x, last_decoder_y + 4.0, 0), new THREE.SphereGeometry(0.6, 16, 12), 0x32cd32, { type: 'softmax' });
-
-      createCurvedConnection(prevDecBlock.position, linear.position, 0xffffff, 0);
-      createCurvedConnection(linear.position, softmax.position, 0xffffff, 0);
-
-      addOutline(linear, 0x808080, 0.06);
+      createCurvedConnection(prevDecBlock.position, lmHead.position, 0xffffff, 0);
+      createCurvedConnection(lmHead.position, softmax.position, 0xffffff, 0);
+      addOutline(lmHead, 0x808080, 0.06);
       addOutline(softmax, 0x32cd32, 0.06);
+      createTextLabel("Next Token Prediction", new THREE.Vector3(dec_x, last_decoder_y + 5.5, 0), 0.7, "#22c55e");
+  }
 
-      createTextLabel("Output", new THREE.Vector3(dec_x, last_decoder_y + 5.5, 0), 0.7, "#22c55e");
+  // --- MoE ARCHITECTURE BUILDER ---
+  function createMoENetwork() {
+      const { expertLayers } = state.architecture.moe;
+      const layer = expertLayers[0]; // Reverted to simple, single-layer logic
+      const expert_spacing = 8.0;
+
+      // --- Vertical Layout Positions (Corrected for proper spacing and to be above grid) ---
+      const router_y = 22;
+      const prob_y = 12;
+      const experts_y = 0;
+      const usage_y = -10;
+      const combiner_y = -18;
+
+      // --- 1. Router (Top) ---
+      const router_fnn = createTransformerComponent('Gating FNN', new THREE.Vector3(0, router_y, 0), new THREE.BoxGeometry(5, 3, 2), 0xffd700, { type: 'moe_router_fnn' });
+      const router_softmax = createTransformerComponent('Softmax', new THREE.Vector3(0, router_y - 4, 0), new THREE.SphereGeometry(1.2), 0xfeca57, { type: 'moe_router_softmax' });
+      createCurvedConnection(router_fnn.position, router_softmax.position, 0xffffff, 0);
+      addDottedBox(new THREE.Vector3(0, router_y - 1, 0), {x: 8, y: 8, z: 5}, 0xffd700);
+      createTextLabel("Router", new THREE.Vector3(0, router_y + 5, 0), 0.8, "#ffd700");
+
+      // --- 2. Probabilities Layer (Gate Values Histogram) ---
+      const total_prob_width = (layer.experts - 1) * expert_spacing;
+      const prob_start_x = -total_prob_width / 2;
+      for (let i = 0; i < layer.experts; i++) {
+          const hist_x = prob_start_x + i * expert_spacing;
+          const gateBar = createTransformerComponent(null, new THREE.Vector3(hist_x, prob_y, 0), new THREE.BoxGeometry(1.5, 0.1, 0.4), 0x22d3ee, { type: 'moe_gate_bar', layer: 0, expert: i });
+          gateBar.userData.base_y = prob_y;
+          addOutline(gateBar, 0x22d3ee, 0.05);
+          createCurvedConnection(router_softmax.position, gateBar.position, 0xcccccc, 0);
+      }
+      addDottedBox(new THREE.Vector3(0, prob_y, 0), {x: total_prob_width + 8, y: 4, z: 5}, 0x22d3ee);
+      createTextLabel("Probabilities", new THREE.Vector3(0, prob_y + 3, 0), 0.8, "#22d3ee");
+
+      // --- 3. Expert Layer ---
+      const total_expert_width = (layer.experts - 1) * expert_spacing;
+      const expert_start_x = -total_expert_width / 2;
+      for (let i = 0; i < layer.experts; i++) {
+          const expert_x = expert_start_x + i * expert_spacing;
+          const expert_color = new THREE.Color().setHSL(i / layer.experts, 0.7, 0.6);
+
+          const expert_block = createTransformerComponent(`E${i + 1}`, new THREE.Vector3(expert_x, experts_y, 0), new THREE.BoxGeometry(4, 6, 3), expert_color, { type: 'moe_expert', layer: 0, expert_id: i });
+          addOutline(expert_block, expert_color, 0.08);
+
+          createCurvedConnection(new THREE.Vector3(expert_x, prob_y, 0), expert_block.position, 0xcccccc, 0);
+      }
+      // Corrected Expert Pool Outline position
+      addDottedBox(new THREE.Vector3(0, experts_y + 3, 0), {x: total_expert_width + 8, y: 10, z: 6}, 0xa855f7);
+      createTextLabel(`Expert Pool - ${layer.name}`, new THREE.Vector3(0, experts_y + 9, 0), 0.8, "#a855f7");
+
+      // --- 4. Expert Usage Histogram ---
+      const usageBars = [];
+      for (let i = 0; i < layer.experts; i++) {
+          const usage_x = expert_start_x + i * expert_spacing;
+          const usageBar = createTransformerComponent(null, new THREE.Vector3(usage_x, usage_y, 0), new THREE.BoxGeometry(2, 0.1, 0.6), 0x4ecdc4, { type: 'moe_usage_bar', layer: 0, expert: i });
+          usageBar.userData.base_y = usage_y;
+          addOutline(usageBar, 0x4ecdc4, 0.05);
+          createCurvedConnection(new THREE.Vector3(usage_x, experts_y, 0), usageBar.position, 0xcccccc, 0);
+          usageBars.push(usageBar);
+      }
+      addDottedBox(new THREE.Vector3(0, usage_y, 0), {x: total_expert_width + 8, y: 4, z: 5}, 0x4ecdc4);
+      createTextLabel(`Usage`, new THREE.Vector3(0, usage_y + 3, 0), 0.8, "#4ecdc4");
+
+      // --- 5. Combiner (Bottom) ---
+      const combiner = createTransformerComponent('Weighted Sum', new THREE.Vector3(0, combiner_y, 0), new THREE.SphereGeometry(2.5), 0x22c55e, { type: 'moe_combiner' });
+      addOutline(combiner, 0x22c55e, 0.08);
+      addDottedBox(new THREE.Vector3(0, combiner_y, 0), {x: 6, y: 6, z: 6}, 0x22c55e);
+      createTextLabel("Output", new THREE.Vector3(0, combiner_y + 4, 0), 0.8, "#22c55e");
+
+      // Connect all usage bars (representing expert outputs) to the combiner
+      usageBars.forEach(bar => {
+        createCurvedConnection(bar.position, combiner.position, 0xcccccc, 0);
+      });
+
+      camState.targetDistance = calculateOptimalDistance([]);
+      camState.distance = camState.targetDistance;
   }
 
   // --- NETWORK CREATION DISPATCH ---
@@ -771,21 +779,10 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'cnn':
         createCNNNetwork();
         break;
-      case 'rnn':
-        createRNNNetwork();
-        break;
-      case 'lstm':
-        createLSTMNetwork();
-        break;
-      case 'gru':
-        createGRUNetwork();
-        break;
       case 'moe':
         createMoENetwork();
         break;
-      case 'gan':
-        createGANNetwork();
-        break;
+      case 'autoencoder':
       case 'fnn':
       default:
         const layers = getCurrentLayerConfig();
@@ -818,25 +815,11 @@ document.addEventListener('DOMContentLoaded', () => {
         maxDimension = Math.max(width_cnn, 20);
         break;
 
-      case 'rnn':
-      case 'lstm':
-      case 'gru':
-        // RNN unrolled across time steps
-        const timeSteps = currentArch.timeSteps || 5;
-        const width_rnn = timeSteps * 5 + 10; // Time step spacing + padding
-        maxDimension = Math.max(width_rnn, 20);
-        break;
-
       case 'moe':
         // Circular expert arrangement
         const numExperts = currentArch.experts || 4;
-        const radius = Math.max(5, numExperts * 0.8);
-        maxDimension = Math.max(radius * 3, 20); // Diameter + padding
-        break;
-
-      case 'gan':
-        // Two networks side by side
-        maxDimension = Math.max(25, 20);
+        const radius = Math.max(5, numExperts * 2.5); // Wider for pipeline layout
+        maxDimension = Math.max(radius * 2.5, 40); // Diameter + padding
         break;
 
       case 'fnn':
@@ -881,7 +864,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Create new grid helper
     gridHelper = new THREE.GridHelper(gridSize, Math.max(20, gridSize / 2), gridColor, subGridColor);
-    gridHelper.position.y = -8;
+    // Move grid under the model
+    if (archType === 'moe') {
+        gridHelper.position.y = -22; // Position grid under the MoE model
+    } else {
+        gridHelper.position.y = -8;
+    }
     scene.add(gridHelper);
 
     return gridSize;
@@ -890,30 +878,63 @@ document.addEventListener('DOMContentLoaded', () => {
   // --- CNN ARCHITECTURE BUILDERS ---
   function createCNNNetwork() {
     const variant = state.architecture.cnn.variant;
-    const y_base = -5; // Lower the model to be closer to the grid
+    const y_base = -8; // Set base to the grid level
 
-    // Input image
-    const inputImage = createTransformerComponent('Input Image', new THREE.Vector3(-15, y_base, 0), new THREE.BoxGeometry(4, 4, 0.3), 0x3b82f6, { type: 'input', layer: 0 });
-    addOutline(inputImage, 0x3b82f6, 0.05);
-
-    // CNN layers based on variant
     let layerConfigs = getCNNLayerConfig(variant);
-    let lastPosition = inputImage.position.clone();
+
+    // Calculate total width to center the model
+    let totalWidth = 0;
+    let tempSpacing = 7.0;
+    layerConfigs.forEach(() => {
+        totalWidth += tempSpacing;
+        tempSpacing *= 0.95;
+    });
+    const startX = -totalWidth / 2;
+
+    // Input image as a thin 3D block
+    const inputGeo = new THREE.BoxGeometry(4, 4, 0.2);
+    const inputComp = createTransformerComponent('Input Image', new THREE.Vector3(startX, y_base, 0), inputGeo, 0x3b82f6, { type: 'input', layer: 0 });
+
+    let lastPosition = inputComp.position.clone();
+    let horizontalSpacing = 7.0;
+    let currentScale = 1.0;
 
     layerConfigs.forEach((config, index) => {
-      const x = -10 + index * 4; // Increase spacing
-      // Create a funnel effect by lowering the y position for deeper layers
-      const y = y_base - index * 0.5;
-      const component = createTransformerComponent(config.name, new THREE.Vector3(x, y, 0), config.geometry, config.color, { type: config.type, layer: index });
-      addOutline(component, config.color, 0.05);
+        const x = lastPosition.x + horizontalSpacing;
+        currentScale *= 0.92; // Gradually reduce scale for the funnel effect
+        horizontalSpacing *= 0.95; // Gradually reduce spacing
 
-      createCurvedConnection(lastPosition, component.position, 0xffffff, 0);
-      lastPosition = component.position;
+        // Clone and scale the original geometry to create the funnel effect
+        let funnelGeometry = config.geometry.clone();
+        let params = funnelGeometry.parameters;
+
+        if (funnelGeometry instanceof THREE.BoxGeometry) {
+            params.width *= currentScale;
+            params.height *= currentScale;
+            params.depth *= currentScale; // Scale depth for a 3D funnel
+        } else if (funnelGeometry instanceof THREE.SphereGeometry) {
+            params.radius *= currentScale;
+        } else if (funnelGeometry instanceof THREE.CylinderGeometry) {
+            params.radiusTop *= currentScale;
+            params.radiusBottom *= currentScale;
+            params.height *= currentScale;
+        } else if (funnelGeometry instanceof THREE.DodecahedronGeometry || funnelGeometry instanceof THREE.OctahedronGeometry || funnelGeometry instanceof THREE.ConeGeometry) {
+             params.radius *= currentScale;
+             if(params.height) params.height *= currentScale;
+        }
+
+        // Re-create the geometry from scaled parameters
+        funnelGeometry = new config.geometry.constructor(...Object.values(params));
+
+        const component = createTransformerComponent(config.name, new THREE.Vector3(x, y_base, 0), funnelGeometry, config.color, { type: config.type, layer: index + 1 });
+
+        createCurvedConnection(lastPosition, component.position, 0xffffff, 0);
+        lastPosition = component.position;
     });
 
     // Set camera distance based on grid size
     const gridSize = calculateGridSize('cnn', state.architecture.cnn);
-    camState.targetDistance = Math.max(40, gridSize * 0.8);
+    camState.targetDistance = Math.max(50, gridSize * 0.9);
     camState.distance = camState.targetDistance;
   }
 
@@ -1009,7 +1030,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const currentArch = state.architecture[state.archType];
     const layerCount = Array.isArray(currentArch) ? currentArch.length : (currentArch.encoderBlocks || 0) + (currentArch.decoderBlocks || 0) + (currentArch.experts || 0) + (currentArch.depth || 0);
     const neuronCount = Array.isArray(currentArch) ? currentArch.reduce((s, l) => s + l.neurons, 0) : 'N/A';
-    document.getElementById('network-stats').textContent = `${layerCount} components ��� ${neuronCount} neurons`;
+    document.getElementById('network-stats').textContent = `${layerCount} components • ${neuronCount} neurons`;
 
     document.getElementById('start-btn').classList.toggle('hidden', state.isTraining);
     document.getElementById('stop-btn').classList.toggle('hidden', !state.isTraining);
@@ -1033,6 +1054,7 @@ document.addEventListener('DOMContentLoaded', () => {
     settingsPanel.classList.toggle('visible', state.activePanel === 'settings');
     panelDetailsContainer.style.display = state.activePanel ? 'block' : 'none';
     document.getElementById('camera-mode-toggle').checked = state.cameraMode === 'manual';
+    document.getElementById('theme-toggle').checked = state.theme === 'light';
   }
 
   function getTransformerVariantDescription(variant) {
@@ -1085,25 +1107,53 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
           </div>`;
         break;
-      case 'rnn':
-      case 'lstm':
-      case 'gru':
-        html = `<h3 style="color: var(--purple);">RNN Architecture</h3>
-          <div style="display: flex; flex-direction: column; gap: 0.75rem;">
-            <div><label>Time Steps:</label><input type="number" min="3" max="10" value="${state.architecture[state.archType].timeSteps}" class="update-arch-input" data-field="timeSteps"></div>
-          </div>`;
-        break;
       case 'moe':
+        const moeVariants = ['ST-MoE', 'GLaM', 'Switch'];
         html = `<h3 style="color: var(--green);">Mixture of Experts</h3>
           <div style="display: flex; flex-direction: column; gap: 0.75rem;">
-            <div><label>Experts:</label><input type="number" min="2" max="8" value="${state.architecture.moe.experts}" class="update-arch-input" data-field="experts"></div>
+            <div>
+              <label>Variant:</label>
+              <select id="moe-variant-select" class="update-moe-variant">
+                ${moeVariants.map(opt => `<option value="${opt}" ${state.architecture.moe.variant === opt ? 'selected' : ''}>${opt}</option>`).join('')}
+              </select>
+            </div>
+            <div><label>Top-K:</label><input type="number" min="1" max="4" value="${state.architecture.moe.top_k}" class="update-arch-input" data-field="top_k"></div>
+            <div style="margin-top: 0.75rem;">
+              <label style="font-weight: bold;">Expert Layer:</label>
+              ${state.architecture.moe.expertLayers.map((layer, i) => `
+                <div class="expert-layer-item">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                    <span style="font-weight: bold;">${layer.name}</span>
+                  </div>
+                  <div style="display: flex; gap: 0.5rem; align-items: center;">
+                    <label style="margin: 0; font-size: 0.7rem;">Experts:</label>
+                    <input type="number" min="2" max="8" value="${layer.experts}" data-layer="${i}" data-field="experts" class="update-expert-layer-input" style="width: 4rem; font-size: 0.7rem;">
+                    <input type="text" value="${layer.name}" data-layer="${i}" data-field="name" class="update-expert-layer-input" style="flex: 1; font-size: 0.7rem;" placeholder="Layer name">
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+            <div style="margin-top: 1rem;">
+              <h4 style="color: var(--cyan); margin-bottom: 0.5rem;">MoE Variants Explained</h4>
+              <div class="moe-variant-info">
+                <h5>ST-MoE: The Foundational Blueprint</h5>
+                <p>The Sparsely-Gated MoE uses a trainable gating network to select the top-k experts for each token, making the model "sparse." An auxiliary load balancing loss is added to encourage the gating network to distribute tokens evenly across all available experts.</p>
+              </div>
+              <div class="moe-variant-info">
+                <h5>GLaM: Scaling to Trillion-Parameter Models</h5>
+                <p>GLaM replaces the FFN with an MoE layer in every other Transformer block. This alternating pattern, combined with Top-2 gating, proved highly effective, allowing GLaM to outperform dense models like GPT-3 with less energy.</p>
+              </div>
+              <div class="moe-variant-info">
+                <h5>Switch Transformers: Simplifying for Speed</h5>
+                <p>The Switch Transformer simplifies routing by sending each token to only one expert (k=1). This design reduces communication overhead in distributed training, resulting in significant speedups (up to 7x) compared to dense models.</p>
+              </div>
+            </div>
           </div>`;
         break;
-      case 'gan':
-        html = `<h3 style="color: var(--cyan);">GAN Architecture</h3>
+      case 'autoencoder':
+        html = `<h3 style="color: var(--purple);">Autoencoder</h3>
           <div style="display: flex; flex-direction: column; gap: 0.75rem;">
-            <div><label>Generator Layers:</label><input type="number" min="2" max="5" value="${state.architecture.gan.generatorLayers}" class="update-arch-input" data-field="generatorLayers"></div>
-            <div><label>Discriminator Layers:</label><input type="number" min="2" max="5" value="${state.architecture.gan.discriminatorLayers}" class="update-arch-input" data-field="discriminatorLayers"></div>
+            <div><label>Encoding Dimension:</label><input type="number" min="2" max="8" value="${state.architecture.autoencoder.encodingDim}" class="update-arch-input" data-field="encodingDim"></div>
           </div>`;
         break;
       case 'fnn':
@@ -1122,7 +1172,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <option value="Tanh" ${layer.activation === 'Tanh' ? 'selected' : ''}>Tanh</option>
                     <option value="Softmax" ${layer.activation === 'Softmax' ? 'selected' : ''}>Softmax</option>
                   </select>
-                  <button class="remove-layer-btn" data-index="${i}" style="background: var(--red); color: white; border: none; padding: 0.25rem 0.5rem; border-radius: 4px; cursor: pointer;">Remove</button>
+                  <button class="remove-layer-btn" data-index="${i}" style="background: var(--red); color: white; border: none, padding: 0.25rem 0.5rem; border-radius: 4px; cursor: pointer;">Remove</button>
                 </div>
               </div>
             `).join('')}
@@ -1165,6 +1215,38 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('opt-info-loss-func').textContent = state.trainingParams.lossFunction;
   }
 
+  function drawLossAccGraph() {
+    const ctx = lossAccCanvas.getContext('2d');
+    const w = lossAccCanvas.width;
+    const h = lossAccCanvas.height;
+
+    ctx.clearRect(0, 0, w, h);
+
+    // Draw Loss (Red)
+    ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--red').trim();
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    lossHistory.forEach((val, i) => {
+        const x = (i / Math.max(1, lossHistory.length - 1)) * w;
+        const y = h - (val * h); // Assuming loss is 0-1
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    // Draw Accuracy (Green)
+    ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--green').trim();
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    accHistory.forEach((val, i) => {
+        const x = (i / Math.max(1, accHistory.length - 1)) * w;
+        const y = h - (val * h); // Assuming accuracy is 0-1
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  }
+
   function renderSettingsPanel() {
     let html = `
       <div style="margin-bottom: 0.5rem;">
@@ -1172,7 +1254,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="flex gap-2 items-center">
           <span>Dark</span>
           <label class="switch">
-            <input type="checkbox" id="theme-toggle" ${state.theme === 'light' ? '' : 'checked'}>
+            <input type="checkbox" id="theme-toggle" ${state.theme === 'light' ? 'checked' : ''}>
             <span class="slider round"></span>
           </label>
           <span>Light</span>
@@ -1209,66 +1291,93 @@ document.addEventListener('DOMContentLoaded', () => {
   const manualBtn = document.getElementById('cam-manual-btn');
 
   panelDetailsContainer.addEventListener('click', e => {
-    if (state.archType !== 'fnn') return; // Layer add/remove only for FNN
-    if (e.target.id === 'add-layer-btn') {
+    if (e.target.id === 'add-layer-btn' && state.archType === 'fnn') {
       state.architecture.fnn.splice(-1, 0, { neurons: 8, activation: 'ReLU', name: `Hidden ${state.architecture.fnn.length - 1}` });
       createNetwork();
       renderArchitecturePanel();
     }
-    if (e.target.classList.contains('remove-layer-btn')) {
+    if (e.target.classList.contains('remove-layer-btn') && state.archType === 'fnn') {
       state.architecture.fnn.splice(parseInt(e.target.dataset.index), 1);
       createNetwork();
       renderArchitecturePanel();
     }
   });
+
+  // MERGED EVENT LISTENER
   panelDetailsContainer.addEventListener('change', e => {
-    // FNN specific layer updates
-    if (state.archType === 'fnn' && e.target.classList.contains('update-layer-input')) {
-      const { index, field } = e.target.dataset;
-      const value = e.target.type === 'number' ? parseInt(e.target.value) : e.target.value;
-      state.architecture.fnn[index][field] = value;
-      createNetwork();
-    }
-    // Generic architecture config updates
-    if (e.target.classList.contains('update-arch-input')) {
+      // Theme toggle
+      if (e.target.id === 'theme-toggle') {
+          state.theme = e.target.checked ? 'light' : 'dark';
+          localStorage.setItem('theme', state.theme);
+          applyTheme();
+          return; // Exit after handling
+      }
+
+      // FNN specific layer updates
+      if (state.archType === 'fnn' && e.target.classList.contains('update-layer-input')) {
+        const { index, field } = e.target.dataset;
+        const value = e.target.type === 'number' ? parseInt(e.target.value) : e.target.value;
+        state.architecture.fnn[index][field] = value;
+        createNetwork();
+      }
+      // MoE Expert Updates
+      if (state.archType === 'moe' && e.target.classList.contains('update-expert-layer-input')) {
+          const { layer, field } = e.target.dataset;
+          const layerIndex = parseInt(layer);
+          const value = e.target.type === 'number' ? parseInt(e.target.value) : e.target.value;
+
+          if (field === 'experts') {
+              state.architecture.moe.expertLayers[layerIndex].experts = value;
+              // Resize usage and gate arrays
+              state.architecture.moe.expertUsage[layerIndex] = Array(value).fill(0);
+              state.architecture.moe.gateValues[layerIndex] = Array(value).fill(0);
+          } else {
+              state.architecture.moe.expertLayers[layerIndex][field] = value;
+          }
+          createNetwork();
+          renderArchitecturePanel();
+      }
+      // Generic architecture config updates
+      if (e.target.classList.contains('update-arch-input')) {
+          const { field } = e.target.dataset;
+          const value = parseInt(e.target.value);
+          if (state.architecture[state.archType]) {
+              state.architecture[state.archType][field] = value;
+              createNetwork();
+              renderArchitecturePanel(); // Re-render panel after change
+          }
+      }
+      // CNN Variant change
+      if (e.target.id === 'cnn-variant-select') {
+          state.architecture.cnn.variant = e.target.value;
+          if (!state.architecture.cnn.gridSize) state.architecture.cnn.gridSize = 3; // Ensure gridSize exists for YOLO
+          createNetwork();
+          renderArchitecturePanel(); // Re-render to show/hide variant-specific options
+      }
+      // MoE Variant change
+      if (e.target.id === 'moe-variant-select') {
+          state.architecture.moe.variant = e.target.value;
+          // Adjust top_k for Switch variant
+          if (e.target.value === 'Switch') {
+              state.architecture.moe.top_k = 1;
+          }
+          createNetwork();
+          renderArchitecturePanel();
+      }
+      // Transformer Variant change
+      if (e.target.id === 'transformer-variant-select') {
+          state.architecture.transformer.variant = e.target.value;
+          createNetwork();
+          renderArchitecturePanel(); // Re-render to show/hide variant-specific options
+      }
+      // Training param updates
+      if (e.target.classList.contains('update-param-input')) {
         const { field } = e.target.dataset;
-        const value = parseInt(e.target.value);
-        if (state.architecture[state.archType]) {
-            if (state.archType === 'transformer') {
-                state.architecture.transformer[field] = value;
-            } else if (state.archType === 'cnn') {
-                state.architecture.cnn[field] = value;
-            } else if (['rnn', 'lstm', 'gru'].includes(state.archType)) {
-                state.architecture.rnn[field] = value;
-                state.architecture.lstm[field] = value;
-                state.architecture.gru[field] = value;
-            } else {
-                state.architecture[state.archType][field] = value;
-            }
-            createNetwork();
-            renderArchitecturePanel(); // Re-render panel after change
-        }
-    }
-    // CNN Variant change
-    if (e.target.id === 'cnn-variant-select') {
-        state.architecture.cnn.variant = e.target.value;
-        if (!state.architecture.cnn.gridSize) state.architecture.cnn.gridSize = 3; // Ensure gridSize exists for YOLO
-        createNetwork();
-        renderArchitecturePanel(); // Re-render to show/hide variant-specific options
-    }
-    // Transformer Variant change
-    if (e.target.id === 'transformer-variant-select') {
-        state.architecture.transformer.variant = e.target.value;
-        createNetwork();
-        renderArchitecturePanel(); // Re-render to show/hide variant-specific options
-    }
-    // Training param updates
-    if (e.target.classList.contains('update-param-input')) {
-      const { field } = e.target.dataset;
-      const value = e.target.type === 'number' ? parseFloat(e.target.value) : e.target.value;
-      state.trainingParams[field] = value;
-    }
+        const value = e.target.type === 'number' ? parseFloat(e.target.value) : e.target.value;
+        state.trainingParams[field] = value;
+      }
   });
+
 
   // --- ARCHITECTURE DROPDOWN & LOADING SPINNER LOGIC ---
   archTypeSelect.addEventListener('change', e => {
@@ -1301,24 +1410,66 @@ document.addEventListener('DOMContentLoaded', () => {
         state.isTrainingComplete = true;
         state.isTraining = false;
         setTimeout(() => {
-            neurons.flat().forEach(n => n.material.emissive.setHex(0x0099ff));
-            connections.forEach(c => c.material.color.setHex(0x0099ff));
+            const allObjects = [...neurons.flat(), ...transformerObjects];
+            allObjects.forEach(obj => {
+                if (obj.material) {
+                    obj.material.emissive.setHex(0x0099ff);
+                }
+            });
         }, 100);
       }
       state.accuracy = newAcc;
       if (state.batch % 10 === 0) {
         state.epoch++;
         if (state.archType === 'transformer') {
-            state.animationStep = (state.animationStep + 1) % (state.architecture.transformer.encoderBlocks + state.architecture.transformer.decoderBlocks + 2);
-        }
-        if (['rnn', 'lstm', 'gru'].includes(state.archType)) {
-            state.animationStep = (state.animationStep + 1) % state.architecture[state.archType].timeSteps;
+            const { variant, encoderBlocks, decoderBlocks } = state.architecture.transformer;
+            let totalSteps = 2; // input embed + final output
+            if (variant === 'encoder-decoder') {
+                totalSteps += encoderBlocks + decoderBlocks;
+            } else if (variant === 'encoder-only') {
+                totalSteps += encoderBlocks;
+            } else if (variant === 'decoder-only') {
+                totalSteps += decoderBlocks;
+            }
+            state.animationStep = (state.animationStep + 1) % totalSteps;
         }
         if (state.archType === 'cnn') {
             state.animationStep = (state.animationStep + 1) % 12; // Generic 12 steps for longer CNNs
         }
-        if (state.archType === 'gan') {
-            state.animationStep = (state.animationStep + 1) % 2; // 0 for D, 1 for G
+        if (state.archType === 'moe') {
+            // Enhanced MoE simulation with multiple layers
+            const { expertLayers, top_k } = state.architecture.moe;
+            let totalUsage = state.architecture.moe.expertUsage;
+            let gateValues = state.architecture.moe.gateValues;
+
+            expertLayers.forEach((layer, layerIndex) => {
+                // Simulate gate values (selection probabilities)
+                const gates = Array(layer.experts).fill(0).map(() => Math.random());
+                const gateSum = gates.reduce((a, b) => a + b, 0);
+                gateValues[layerIndex] = gates.map(g => g / gateSum); // Normalize to sum to 1
+
+                // Simulate expert selection and usage update
+                const activeExperts = [...Array(layer.experts).keys()]
+                    .sort(() => 0.5 - Math.random())
+                    .slice(0, Math.min(top_k, layer.experts));
+
+                activeExperts.forEach(idx => {
+                    if (!totalUsage[layerIndex]) totalUsage[layerIndex] = Array(layer.experts).fill(0);
+                    totalUsage[layerIndex][idx]++;
+                });
+
+                // Apply load balancing (aux loss simulation)
+                if (totalUsage[layerIndex]) {
+                    const meanUsage = totalUsage[layerIndex].reduce((a, b) => a + b, 0) / layer.experts;
+                    totalUsage[layerIndex] = totalUsage[layerIndex].map(u => THREE.MathUtils.lerp(u, meanUsage, 0.03));
+                }
+            });
+
+            state.architecture.moe.expertUsage = totalUsage;
+            state.architecture.moe.gateValues = gateValues;
+            state.animationStep = { activeExperts: expertLayers.map((layer, idx) =>
+                [...Array(layer.experts).keys()].sort(() => 0.5 - Math.random()).slice(0, Math.min(top_k, layer.experts))
+            )};
         }
       }
       updateUI();
@@ -1449,27 +1600,45 @@ document.addEventListener('DOMContentLoaded', () => {
           }
       } else if (state.archType === 'transformer') {
           const step = state.animationStep;
-          const encBlocks = state.architecture.transformer.encoderBlocks;
-          const decBlocks = state.architecture.transformer.decoderBlocks;
+          const { variant, encoderBlocks, decoderBlocks } = state.architecture.transformer;
 
           transformerObjects.forEach(obj => {
               if (obj.material && obj.material.emissive) obj.material.emissive.setHex(0);
           });
 
           let activeComponent;
-          if (step === 0) activeComponent = 'embedding';
-          else if (step <= encBlocks) activeComponent = { stack: 'encoder', layer: step - 1 };
-          else if (step <= encBlocks + decBlocks) activeComponent = { stack: 'decoder', layer: step - 1 - encBlocks };
-          else activeComponent = 'output';
+          if (variant === 'encoder-decoder') {
+              if (step === 0) activeComponent = { type: 'embedding', stack: 'encoder' };
+              else if (step <= encoderBlocks) activeComponent = { stack: 'encoder', layer: step - 1 };
+              else if (step === encoderBlocks + 1) activeComponent = { type: 'embedding', stack: 'decoder' };
+              else if (step <= encoderBlocks + decoderBlocks + 1) activeComponent = { stack: 'decoder', layer: step - 2 - encoderBlocks };
+              else activeComponent = { type: 'output' };
+          } else if (variant === 'encoder-only') {
+              if (step === 0) activeComponent = { type: 'embedding' };
+              else if (step <= encoderBlocks) activeComponent = { stack: 'encoder', layer: step - 1 };
+              else activeComponent = { type: 'output' };
+          } else { // decoder-only
+              if (step === 0) activeComponent = { type: 'embedding' };
+              else if (step <= decoderBlocks) activeComponent = { stack: 'decoder', layer: step - 1 };
+              else activeComponent = { type: 'output' };
+          }
+
 
           transformerObjects.forEach(obj => {
               const ud = obj.userData;
               let is_active = false;
-              if (typeof activeComponent === 'string') {
-                  if (activeComponent === 'embedding' && ud.type === 'embedding') is_active = true;
-                  if (activeComponent === 'output' && (ud.type === 'linear' || ud.type === 'softmax')) is_active = true;
-              } else if (ud.stack === activeComponent.stack && ud.layer === activeComponent.layer) {
-                  is_active = true;
+
+              if (typeof activeComponent === 'string') { // Legacy or simple cases
+                  if (activeComponent === 'embedding' && ud.type && ud.type.includes('embedding')) is_active = true;
+                  if (activeComponent === 'output' && (ud.type === 'linear' || ud.type === 'softmax' || ud.type === 'pooler' || ud.type === 'classifier' || ud.type === 'lm_head')) is_active = true;
+              } else if (typeof activeComponent === 'object') {
+                  if (activeComponent.type === 'embedding') {
+                      if (ud.type && ud.type.includes('embedding') && (!activeComponent.stack || ud.stack === activeComponent.stack)) is_active = true;
+                  } else if (activeComponent.type === 'output') {
+                      if (ud.type === 'linear' || ud.type === 'softmax' || ud.type === 'pooler' || ud.type === 'classifier' || ud.type === 'lm_head') is_active = true;
+                  } else if (ud.stack === activeComponent.stack && ud.layer === activeComponent.layer) {
+                      is_active = true;
+                  }
               }
 
               if (is_active) {
@@ -1490,44 +1659,6 @@ document.addEventListener('DOMContentLoaded', () => {
                   }
               }
           });
-      } else if (state.archType === 'rnn') {
-          const step = state.animationStep;
-          transformerObjects.forEach(obj => {
-              if (obj.material.emissive) obj.material.emissive.setHex(0);
-              if (obj.userData.step === step) {
-                  obj.material.emissive.setHex(0x00ff00);
-              }
-          });
-      } else if (state.archType === 'lstm') {
-          const step = state.animationStep;
-          const sinTime = Math.sin(deltaTime * state.animationSpeed * 2);
-          transformerObjects.forEach(obj => {
-              if (obj.material.emissive) obj.material.emissive.setHex(0);
-              if (obj.userData.step === step) {
-                  obj.material.emissive.setHex(0x00ff00);
-                  // Gate animation
-                  if (obj.userData.type === 'gate') {
-                      const gateActivation = (sinTime + 1) / 2; // 0 to 1
-                      obj.scale.y = gateActivation;
-                      obj.material.opacity = 0.5 + gateActivation * 0.5;
-                  }
-              }
-          });
-      } else if (state.archType === 'gru') {
-          const step = state.animationStep;
-          const sinTime = Math.sin(deltaTime * state.animationSpeed * 2);
-          transformerObjects.forEach(obj => {
-              if (obj.material.emissive) obj.material.emissive.setHex(0);
-              if (obj.userData.step === step) {
-                  obj.material.emissive.setHex(0x00ff00);
-                  if (obj.userData.gateType === 'reset') {
-                      obj.scale.x = (sinTime + 1) / 2;
-                  }
-                  if (obj.userData.gateType === 'update') {
-                      obj.rotation.y += 0.05 * sinTime;
-                  }
-              }
-          });
       } else if (state.archType === 'cnn') {
           const step = state.animationStep;
           transformerObjects.forEach(obj => {
@@ -1540,30 +1671,67 @@ document.addEventListener('DOMContentLoaded', () => {
               });
           }
       } else if (state.archType === 'moe') {
-          const gate = transformerObjects.find(o => o.userData.type === 'gate');
-          const experts = transformerObjects.filter(o => o.userData.type === 'expert');
-          gate.material.emissive.setHex(0xffff00);
-          const activeExpert = Math.floor(deltaTime * state.animationSpeed * 2) % experts.length;
-          experts.forEach((exp, i) => {
-              exp.material.emissive.setHex(i === activeExpert ? 0x00ff00 : 0);
+          const activeExpertsData = state.animationStep?.activeExperts || [];
+          const router_fnn = transformerObjects.find(o => o.userData.type === 'moe_router_fnn');
+          const router_softmax = transformerObjects.find(o => o.userData.type === 'moe_router_softmax');
+          const expert_blocks = transformerObjects.filter(o => o.userData.type === 'moe_expert');
+          const gate_bars = transformerObjects.filter(o => o.userData.type === 'moe_gate_bar');
+          const usage_bars = transformerObjects.filter(o => o.userData.type === 'moe_usage_bar');
+
+          // Reset all visuals
+          transformerObjects.forEach(obj => {
+              if (obj.material && obj.material.emissive) obj.material.emissive.setHex(0);
           });
-      } else if (state.archType === 'gan') {
-          const generator = transformerObjects.find(o => o.userData.type === 'generator');
-          const discriminator = transformerObjects.find(o => o.userData.type === 'discriminator');
-          // Step 0: Discriminator trains
-          if (state.animationStep === 0) {
-              discriminator.material.emissive.setHex(0x00ff00);
-              generator.material.emissive.setHex(0);
-              if (Math.random() < 0.1) { // Fake data flow
-                  const fakeData = new THREE.Mesh(new THREE.SphereGeometry(0.2), new THREE.MeshBasicMaterial({color: 0xff8888}));
-                  fakeData.position.copy(generator.position);
-                  scene.add(fakeData);
-                  setTimeout(() => scene.remove(fakeData), 1000);
-              }
-          } else { // Step 1: Generator trains
-              generator.material.emissive.setHex(0x00ff00);
-              discriminator.material.emissive.setHex(0);
-          }
+
+          // Animate router
+          if (router_fnn) router_fnn.material.emissive.setHex(0xffff00);
+          if (router_softmax) router_softmax.material.emissive.setHex(0xffff00);
+
+          // Animate active experts across all layers
+          activeExpertsData.forEach((layerActiveExperts, layerIndex) => {
+              layerActiveExperts.forEach(expertId => {
+                  // Highlight expert block
+                  const expert_block = expert_blocks.find(e => e.userData.layer === layerIndex && e.userData.expert_id === expertId);
+                  if (expert_block) expert_block.material.emissive.setHex(0x00ff00);
+
+
+                  // Particle flow
+                  if (router_softmax && expert_block && Math.random() < 0.15) {
+                      const particle = new THREE.Mesh(new THREE.SphereGeometry(0.12, 6, 6), new THREE.MeshBasicMaterial({ color: 0x00ff88, transparent: true }));
+                      particle.position.copy(router_softmax.position);
+                      const velocity = expert_block.position.clone().sub(router_softmax.position).normalize().multiplyScalar(12);
+                      particle.userData = { velocity, life: 1.2 };
+                      particles.push(particle);
+                      scene.add(particle);
+                  }
+              });
+          });
+
+          // Update gate value histograms
+          state.architecture.moe.gateValues.forEach((layerGates, layerIndex) => {
+              const maxGate = Math.max(...layerGates);
+              layerGates.forEach((gateValue, expertIndex) => {
+                  const bar = gate_bars.find(b => b.userData.layer === layerIndex && b.userData.expert === expertIndex);
+                  if (bar) {
+                      const targetHeight = Math.max(0.1, (gateValue / Math.max(maxGate, 0.1)) * 2);
+                      bar.scale.y = THREE.MathUtils.lerp(bar.scale.y, targetHeight, 0.1);
+                      bar.position.y = bar.userData.base_y + (bar.geometry.parameters.height * bar.scale.y) / 2;
+                  }
+              });
+          });
+
+          // Update usage histograms
+          state.architecture.moe.expertUsage.forEach((layerUsage, layerIndex) => {
+              const maxUsage = Math.max(1, ...layerUsage);
+              layerUsage.forEach((usage, expertIndex) => {
+                  const bar = usage_bars.find(b => b.userData.layer === layerIndex && b.userData.expert === expertIndex);
+                  if (bar) {
+                      const targetHeight = Math.max(0.1, (usage / maxUsage) * 3);
+                      bar.scale.y = THREE.MathUtils.lerp(bar.scale.y, targetHeight, 0.1);
+                      bar.position.y = bar.userData.base_y + (bar.geometry.parameters.height * bar.scale.y) / 2;
+                  }
+              });
+          });
       }
     }
 

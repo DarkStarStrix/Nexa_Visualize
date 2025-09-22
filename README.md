@@ -9,6 +9,12 @@ backpropagation, and the impact of hyperparameter tuning.
 ## Features
 
 -   **Interactive 3D Visualization:** View neural network architectures in a dynamic 3D space.
+-   **Multiple Model Architectures:** Visualize and interact with a variety of popular models:
+    -   Feedforward Neural Networks (FNNs)
+    -   Convolutional Neural Networks (CNNs) with variants like LeNet, AlexNet, and ResNet.
+    -   Transformers (Encoder-only, Decoder-only, and Encoder-Decoder).
+    -   Mixture of Experts (MoE).
+    -   Autoencoders / VAEs.
 -   **Dynamic Architecture:** Add or remove hidden layers and change the number of neurons in real-time to see how the structure changes.
 -   **Real-time Training Animation:** Observe the training process with clear, distinct animations:
     -   **Forward Pass:** A green wave of light flows from the input to the output layer.
