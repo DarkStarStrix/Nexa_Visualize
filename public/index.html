@@ -20,6 +20,16 @@
       --input-bg: #3f3f46;
       --input-border: #52525b;
       --layer-item-bg: #27272a;
+      --op-input: #f59e0b;
+      --op-input-outline: #b45309;
+      --op-projection: #60a5fa;
+      --op-projection-outline: #2563eb;
+      --op-spectral: #f472b6;
+      --op-spectral-outline: #db2777;
+      --op-mlp: #c084fc;
+      --op-mlp-outline: #7c3aed;
+      --op-hover: #38bdf8;
+      --op-selected: #f8fafc;
     }
     body {
       margin: 0;
@@ -84,6 +94,133 @@
       color: var(--text-med);
       line-height: 1.5;
     }
+    .legend-panel {
+      position: absolute;
+      top: 1rem;
+      right: 22.5rem;
+      padding: 0.75rem;
+      min-width: 190px;
+      border: 1px solid var(--border-color);
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25);
+    }
+    .legend-panel.hidden {
+      display: none;
+    }
+    .legend-title {
+      font-size: 0.8rem;
+      font-weight: 600;
+      margin: 0 0 0.5rem 0;
+      color: var(--text-light);
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.75rem;
+      color: var(--text-med);
+      margin-bottom: 0.4rem;
+    }
+    .legend-item:last-child {
+      margin-bottom: 0;
+    }
+    .legend-swatch {
+      width: 12px;
+      height: 12px;
+      border-radius: 3px;
+      border: 2px solid transparent;
+      box-sizing: border-box;
+      background: currentColor;
+    }
+    .legend-swatch.input {
+      color: var(--op-input);
+      border-color: var(--op-input-outline);
+    }
+    .legend-swatch.projection {
+      color: var(--op-projection);
+      border-color: var(--op-projection-outline);
+    }
+    .legend-swatch.spectral {
+      color: var(--op-spectral);
+      border-color: var(--op-spectral-outline);
+    }
+    .legend-swatch.mlp {
+      color: var(--op-mlp);
+      border-color: var(--op-mlp-outline);
+    }
+    .view-toggle {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.4rem;
+      margin-top: 0.6rem;
+    }
+    .view-toggle button {
+      padding: 0.4rem 0.6rem;
+      border-radius: 6px;
+      border: 1px solid var(--border-color);
+      background: var(--input-bg);
+      color: var(--text-med);
+      font-size: 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    .view-toggle button:hover {
+      color: var(--text-light);
+      border-color: var(--cyan);
+    }
+    .view-toggle button.active {
+      background: rgba(34, 211, 238, 0.18);
+      color: var(--text-light);
+      border-color: var(--cyan);
+      box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.3);
+    }
+    .operator-details {
+      position: absolute;
+      left: 1rem;
+      top: 6.75rem;
+      padding: 0.85rem 0.9rem;
+      width: 235px;
+      border: 1px solid var(--border-color);
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+      display: flex;
+      flex-direction: column;
+      gap: 0.55rem;
+    }
+    .operator-details.hidden {
+      display: none;
+    }
+    .operator-details h3 {
+      margin: 0;
+      font-size: 0.9rem;
+      color: var(--text-light);
+    }
+    .operator-details .type {
+      font-size: 0.72rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--text-dark);
+    }
+    .operator-details .meta {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.35rem 0.6rem;
+      font-size: 0.75rem;
+      color: var(--text-med);
+    }
+    .operator-details .meta div {
+      padding: 0.35rem 0.45rem;
+      border-radius: 6px;
+      background: var(--layer-item-bg);
+      border: 1px solid rgba(255, 255, 255, 0.04);
+    }
+    .operator-details .description {
+      font-size: 0.76rem;
+      line-height: 1.5;
+      color: var(--text-med);
+    }
+    body.view-mode-2d #status-panel {
+      backdrop-filter: blur(6px);
+    }
     .slider {
       position: absolute;
       cursor: pointer;
@@ -119,6 +256,7 @@
       --input-bg: #e0e0e0;
       --input-border: #b0b0b0;
       --layer-item-bg: #e5e5e5;
+      --op-selected: #0f172a;
     }
     #header-panel { top: 1rem; left: 1rem; padding: 0.75rem; }
     #header-panel h2 { margin: 0 0 0.5rem 0; font-size: 1.125rem; font-weight: bold; color: var(--cyan); }
@@ -185,6 +323,7 @@
   <script src="https://cdn.jsdelivr.net/npm/three@0.153.0/build/three.min.js"></script>
 </head>
 <body>
+  <div id="root" style="display: none;"></div>
   <canvas id="main3d"></canvas>
 
   <!-- Header -->
@@ -207,6 +346,7 @@
           <option value="fnn">Feedforward Neural Network</option>
           <option value="transformer">Transformer</option>
           <option value="cnn">Convolutional Neural Network</option>
+          <option value="operator">Neural Operator</option>
           <option value="moe">Mixture of Experts (MoE)</option>
           <option value="autoencoder">Autoencoder / VAE</option>
         </select>
@@ -231,6 +371,10 @@
           <label for="speed-slider"></label><input type="range" min="0.5" max="3.0" step="0.1" value="1.0" id="speed-slider" class="w-12">
           <span id="speed-value" class="w-8">1.0x</span>
         </div>
+      </div>
+      <div class="view-toggle">
+        <button id="view-3d-btn" type="button" class="active">3D View</button>
+        <button id="view-2d-btn" type="button">2D View</button>
       </div>
       <div class="flex gap-2" style="margin-top: 0.75rem;">
         <button id="start-btn" class="btn start" style="flex-grow: 1;">Start Training</button>
@@ -277,6 +421,21 @@
         </div>
       </div>
     </div>
+  </div>
+
+  <div id="operator-legend" class="panel legend-panel hidden" aria-live="polite">
+    <p class="legend-title">Neural Operator Blocks</p>
+    <div class="legend-item"><span class="legend-swatch input"></span><span>Input / Output</span></div>
+    <div class="legend-item"><span class="legend-swatch projection"></span><span>Projection</span></div>
+    <div class="legend-item"><span class="legend-swatch spectral"></span><span>Spectral Convolution</span></div>
+    <div class="legend-item"><span class="legend-swatch mlp"></span><span>MLP Head</span></div>
+  </div>
+
+  <div id="operator-details" class="panel operator-details hidden" aria-live="polite">
+    <div class="type" id="operator-details-type">Operator Block</div>
+    <h3 id="operator-details-title">Select a block</h3>
+    <div class="meta" id="operator-details-meta"></div>
+    <div class="description" id="operator-details-description">Hover or click a module to inspect its role in the operator pipeline.</div>
   </div>
 
   <!-- Status Bar -->
