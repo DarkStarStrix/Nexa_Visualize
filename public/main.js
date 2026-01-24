@@ -23,6 +23,14 @@ document.addEventListener('DOMContentLoaded', () => {
         decoderBlocks: 2
       },
       cnn: { variant: 'LeNet', convLayers: 2, fcLayers: 2 },
+      operator: {
+        spectralBlocks: 3,
+        width: 64,
+        projectionDim: 64,
+        mlpDim: 128,
+        inputDim: 3,
+        outputDim: 3
+      },
       moe: {
         variant: 'ST-MoE',
         expertLayers: [
@@ -44,6 +52,8 @@ document.addEventListener('DOMContentLoaded', () => {
     theme: localStorage.getItem('theme') || 'dark',
     archType: 'fnn', // NEW: selected architecture type
     animationStep: 0, // For multi-step animations
+    viewMode: localStorage.getItem('viewMode') || '3d',
+    selectedOperatorKey: null,
   };
 
   // --- DOM ELEMENTS ---
@@ -55,6 +65,14 @@ document.addEventListener('DOMContentLoaded', () => {
   const panelDetailsContainer = document.getElementById('panel-details-container');
   const archTypeSelect = document.getElementById('arch-type-select');
   const archLoadingSpinner = document.getElementById('arch-loading-spinner');
+  const operatorLegend = document.getElementById('operator-legend');
+  const operatorDetails = document.getElementById('operator-details');
+  const operatorDetailsType = document.getElementById('operator-details-type');
+  const operatorDetailsTitle = document.getElementById('operator-details-title');
+  const operatorDetailsMeta = document.getElementById('operator-details-meta');
+  const operatorDetailsDescription = document.getElementById('operator-details-description');
+  const view3dBtn = document.getElementById('view-3d-btn');
+  const view2dBtn = document.getElementById('view-2d-btn');
 
   // --- 3D SETUP ---
   const renderer = new THREE.WebGLRenderer({ canvas: canvas3d, antialias: true, powerPreference: "high-performance" });
@@ -66,7 +84,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x0a0a0a);
 
-  const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+  const perspectiveCamera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 1200);
+  const orthographicCamera = new THREE.OrthographicCamera(-20, 20, 20, -20, 0.1, 1200);
+  let camera = perspectiveCamera;
 
   const ambientLight = new THREE.AmbientLight(0x404040, 0.4);
   scene.add(ambientLight);
@@ -90,26 +110,118 @@ document.addEventListener('DOMContentLoaded', () => {
   let trainingInterval = null;
   let transformerObjects = []; // For custom transformer meshes
   let particles = []; // For data flow animation
+  let interactiveObjects = [];
+  let operatorModuleMeta = [];
+  let hoveredOperatorObject = null;
+  let selectedOperatorObject = null;
+  const raycaster = new THREE.Raycaster();
+  const pointer = new THREE.Vector2();
 
   // --- CAMERA CONTROLS ---
   let isDragging = false;
+  let dragDistance = 0;
+  let lastDragWasPan = false;
   let prevMouse = { x: 0, y: 0 };
-  let camState = { distance: 15, angleX: 0, angleY: 0.3, targetDistance: 15, targetAngleX: 0, targetAngleY: 0.3 };
+  let camState = {
+    distance: 42,
+    angleX: -0.7,
+    angleY: 0.32,
+    targetDistance: 42,
+    targetAngleX: -0.7,
+    targetAngleY: 0.32,
+    panX: 0,
+    panY: 0,
+    targetPanX: 0,
+    targetPanY: 0
+  };
 
-  canvas3d.addEventListener('mousedown', e => { if (state.cameraMode === 'manual') { isDragging = true; prevMouse = { x: e.clientX, y: e.clientY }; } });
-  canvas3d.addEventListener('mouseup', () => isDragging = false);
-  canvas3d.addEventListener('mouseleave', () => isDragging = false);
-  canvas3d.addEventListener('mousemove', e => {
-    if (!isDragging || state.cameraMode !== 'manual') return;
-    camState.targetAngleX += (e.clientX - prevMouse.x) * 0.008;
-    camState.targetAngleY = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, camState.targetAngleY + (e.clientY - prevMouse.y) * 0.008));
+  canvas3d.addEventListener('mousedown', e => {
+    if (state.cameraMode !== 'manual') return;
+    isDragging = true;
+    dragDistance = 0;
+    lastDragWasPan = false;
     prevMouse = { x: e.clientX, y: e.clientY };
+    if (state.viewMode === '2d') e.preventDefault();
+  });
+  canvas3d.addEventListener('mouseup', () => {
+    isDragging = false;
+    lastDragWasPan = dragDistance > 6;
+  });
+  canvas3d.addEventListener('mouseleave', () => {
+    isDragging = false;
+    lastDragWasPan = false;
+    hoveredOperatorObject = null;
+    updateOperatorDetailsPanel();
+  });
+  canvas3d.addEventListener('mousemove', e => {
+    if (isDragging && state.cameraMode === 'manual') {
+      const dx = e.clientX - prevMouse.x;
+      const dy = e.clientY - prevMouse.y;
+      dragDistance += Math.abs(dx) + Math.abs(dy);
+      if (state.viewMode === '2d') {
+        const panScale = camState.distance * 0.0024;
+        camState.targetPanX -= dx * panScale;
+        camState.targetPanY += dy * panScale;
+      } else {
+        camState.targetAngleX += dx * 0.008;
+        camState.targetAngleY = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, camState.targetAngleY + dy * 0.008));
+      }
+      prevMouse = { x: e.clientX, y: e.clientY };
+    }
+    handlePointerMove(e);
   });
   canvas3d.addEventListener('wheel', e => {
     if (state.cameraMode !== 'manual') return;
     e.preventDefault();
-    camState.targetDistance = Math.max(5, Math.min(80, camState.targetDistance + e.deltaY * 0.05));
+    const zoomScale = state.viewMode === '2d' ? 0.03 : 0.05;
+    const minZoom = state.viewMode === '2d' ? 18 : 12;
+    const maxZoom = state.viewMode === '2d' ? 120 : 110;
+    camState.targetDistance = Math.max(minZoom, Math.min(maxZoom, camState.targetDistance + e.deltaY * zoomScale));
   }, { passive: false });
+  canvas3d.addEventListener('click', handleOperatorClick);
+
+  function updateOrthographicFrustum() {
+    const aspect = window.innerWidth / window.innerHeight;
+    const frustumSize = camState.distance * 0.32;
+    orthographicCamera.left = -frustumSize * aspect;
+    orthographicCamera.right = frustumSize * aspect;
+    orthographicCamera.top = frustumSize;
+    orthographicCamera.bottom = -frustumSize;
+    orthographicCamera.updateProjectionMatrix();
+  }
+
+  function setActiveCamera() {
+    camera = state.viewMode === '2d' ? orthographicCamera : perspectiveCamera;
+    perspectiveCamera.aspect = window.innerWidth / window.innerHeight;
+    perspectiveCamera.updateProjectionMatrix();
+    updateOrthographicFrustum();
+  }
+
+  function updateGridVisibility() {
+    if (gridHelper) {
+      gridHelper.visible = state.viewMode === '3d';
+    }
+  }
+
+  function applyViewModeClass() {
+    document.body.classList.toggle('view-mode-2d', state.viewMode === '2d');
+    document.body.classList.toggle('view-mode-3d', state.viewMode !== '2d');
+  }
+
+  function switchViewMode(mode) {
+    if (state.viewMode === mode) return;
+    state.viewMode = mode;
+    localStorage.setItem('viewMode', mode);
+    if (mode === '2d') {
+      camState.targetPanX = 0;
+      camState.targetPanY = 0;
+    }
+    setActiveCamera();
+    applyViewModeClass();
+    updateGridVisibility();
+    createNetwork();
+    updateUI();
+  }
 
   // --- CORE 3D LOGIC ---
 
@@ -334,6 +446,7 @@ document.addEventListener('DOMContentLoaded', () => {
     switch (state.archType) {
       case 'transformer':
       case 'cnn':
+      case 'operator':
         return []; // These have their own builders
       case 'moe': return getMoEConfig();
       case 'autoencoder': return getAutoencoderConfig();
@@ -344,18 +457,23 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function calculateOptimalDistance(layers) {
+    const adjustForViewMode = value => state.viewMode === '2d' ? value * 1.2 : value;
     if (state.archType === 'transformer') {
-        return 50;
+        return adjustForViewMode(50);
     }
     if (state.archType === 'cnn') {
-        return 50;
+        return adjustForViewMode(50);
+    }
+    if (state.archType === 'operator') {
+        return adjustForViewMode(55);
     }
     if (state.archType === 'moe') {
-        return 25;
+        return adjustForViewMode(25);
     }
     const networkWidth = layers.length * 5.0; // Adjusted for new spacing
     const networkHeight = Math.max(...layers.map(layer => layer.gridSize[1])) * 2;
-    return Math.max(15, Math.max(networkWidth, networkHeight) * 1.5);
+    const baseDistance = Math.max(15, Math.max(networkWidth, networkHeight) * 1.5);
+    return adjustForViewMode(baseDistance);
   }
 
   function createGenericNetwork(layers) {
@@ -754,6 +872,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // --- NETWORK CREATION DISPATCH ---
   function createNetwork() {
+    const previousOperatorKey = state.selectedOperatorKey;
     // Clear existing network
     neurons.forEach(layer => layer.forEach(n => { scene.remove(n); n.geometry.dispose(); n.material.dispose(); }));
     connections.forEach(c => { scene.remove(c); c.geometry.dispose(); c.material.dispose(); });
@@ -764,6 +883,11 @@ document.addEventListener('DOMContentLoaded', () => {
     connections = [];
     transformerObjects = [];
     particles = [];
+    interactiveObjects = [];
+    operatorModuleMeta = [];
+    hoveredOperatorObject = null;
+    selectedOperatorObject = null;
+    state.selectedOperatorKey = null;
 
     // Get current architecture config
     const currentArch = state.architecture[state.archType];
@@ -779,6 +903,11 @@ document.addEventListener('DOMContentLoaded', () => {
       case 'cnn':
         createCNNNetwork();
         break;
+      case 'operator':
+        createOperatorNetwork();
+        state.animationStep = state.animationStep % getOperatorStepCount();
+        applyOperatorSelectionByKey(previousOperatorKey);
+        break;
       case 'moe':
         createMoENetwork();
         break;
@@ -790,6 +919,7 @@ document.addEventListener('DOMContentLoaded', () => {
         break;
     }
 
+    updateOperatorLegendVisibility();
     updateUI();
   }
 
@@ -813,6 +943,14 @@ document.addEventListener('DOMContentLoaded', () => {
         const layerCount = getCNNLayerConfig(currentArch.variant).length;
         const width_cnn = (layerCount + 2) * 3 + 10; // Layer spacing + input + padding
         maxDimension = Math.max(width_cnn, 20);
+        break;
+
+      case 'operator':
+        // Neural operator layout spreads horizontally with stacked blocks
+        const opBlocks = currentArch.spectralBlocks || 1;
+        const opWidth = (opBlocks + 4) * 5 + 18;
+        const opHeight = 26;
+        maxDimension = Math.max(opWidth, opHeight, 36);
         break;
 
       case 'moe':
@@ -870,9 +1008,477 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
         gridHelper.position.y = -8;
     }
+    gridHelper.visible = state.viewMode === '3d';
     scene.add(gridHelper);
 
     return gridSize;
+  }
+
+  // --- NEURAL OPERATOR ARCHITECTURE BUILDERS ---
+  const OPERATOR_COLORS = {
+    input: { fill: 0xf59e0b, outline: 0xb45309 },
+    projection: { fill: 0x60a5fa, outline: 0x2563eb },
+    spectral: { fill: 0xf472b6, outline: 0xdb2777 },
+    mlp: { fill: 0xc084fc, outline: 0x7c3aed },
+    arrow: 0x94a3b8,
+    highlight: 0x34d399,
+    hover: 0x38bdf8,
+    selected: 0xf8fafc
+  };
+
+  function addOperatorOutline(mesh, outlineColor, layerIndex, moduleKey) {
+    const edges = new THREE.EdgesGeometry(mesh.geometry);
+    const outlineMaterial = new THREE.LineBasicMaterial({
+      color: outlineColor,
+      transparent: true,
+      opacity: 0.9
+    });
+    const outline = new THREE.LineSegments(edges, outlineMaterial);
+    outline.position.copy(mesh.position);
+    outline.rotation.copy(mesh.rotation);
+    outline.userData = {
+      layerIndex,
+      moduleKey,
+      baseColor: outlineColor,
+      type: 'operator_outline',
+      kind: 'outline'
+    };
+    scene.add(outline);
+    transformerObjects.push(outline);
+    return outline;
+  }
+
+  function createLayerStack(config, basePosition, layerIndex) {
+    const is2D = state.viewMode === '2d';
+    const stackCount = config.stackCount || 1;
+    const stackOffset = (config.stackOffset || 0.2) * (is2D ? 0.45 : 1);
+    const depthScale = is2D ? 0.38 : 1;
+    const rotationY = is2D ? 0 : -0.22;
+    const xOffsetScale = is2D ? 0.38 : 0.55;
+    const zOffsetScale = is2D ? 0.18 : 1;
+    const meshes = [];
+
+    for (let i = stackCount - 1; i >= 0; i--) {
+      const depthIndex = stackCount - 1 - i;
+      const scale = 1 - depthIndex * 0.03;
+      const geometry = new THREE.BoxGeometry(
+        config.size.x * scale,
+        config.size.y * scale,
+        config.size.z * depthScale
+      );
+      const opacity = Math.min(0.94, 0.58 + i * 0.12);
+      const material = new THREE.MeshPhongMaterial({
+        color: config.color,
+        transparent: true,
+        opacity,
+        shininess: 90
+      });
+      const mesh = new THREE.Mesh(geometry, material);
+      const offset = depthIndex * stackOffset;
+      const offsetX = offset * xOffsetScale;
+      const offsetZ = offset * zOffsetScale;
+      const isInteractive = depthIndex === 0;
+      mesh.position.set(
+        basePosition.x - offsetX,
+        basePosition.y + (config.size.y * scale) / 2,
+        basePosition.z + offsetZ
+      );
+      mesh.rotation.y = rotationY;
+      mesh.userData = {
+        ...config.userData,
+        layerIndex,
+        moduleKey: config.key,
+        label: config.label,
+        sublabel: config.sublabel,
+        description: config.description,
+        dims: config.dims,
+        baseColor: config.color,
+        type: config.type,
+        kind: 'block',
+        interactive: isInteractive
+      };
+      scene.add(mesh);
+      transformerObjects.push(mesh);
+      addOperatorOutline(mesh, config.outlineColor, layerIndex, config.key);
+      if (isInteractive) {
+        interactiveObjects.push(mesh);
+      }
+      meshes.push(mesh);
+    }
+
+    const labelBaseY = basePosition.y + config.size.y + 0.9;
+    const labelZ = basePosition.z + stackCount * 0.12;
+    const labelSize = is2D ? 0.72 : 0.7;
+    createTextLabel(config.label, new THREE.Vector3(basePosition.x, labelBaseY, labelZ), labelSize, '#e2e8f0');
+    if (config.sublabel) {
+      createTextLabel(
+        config.sublabel,
+        new THREE.Vector3(basePosition.x, labelBaseY - 0.65, labelZ),
+        is2D ? 0.56 : 0.52,
+        '#94a3b8'
+      );
+    }
+
+    return {
+      center: new THREE.Vector3(basePosition.x, basePosition.y + config.size.y / 2, basePosition.z),
+      size: config.size,
+      layerIndex,
+      type: config.type,
+      key: config.key,
+      dims: config.dims,
+      description: config.description,
+      label: config.label,
+      sublabel: config.sublabel
+    };
+  }
+
+  function createOperatorArrow(fromMeta, toMeta, label) {
+    const is2D = state.viewMode === '2d';
+    const midY = (fromMeta.center.y + toMeta.center.y) / 2;
+    const start = new THREE.Vector3(fromMeta.center.x + fromMeta.size.x / 2 + 0.65, midY, 0);
+    const end = new THREE.Vector3(toMeta.center.x - toMeta.size.x / 2 - 0.65, midY, 0);
+    const lineGeometry = new THREE.BufferGeometry().setFromPoints([start, end]);
+    const lineMaterial = new THREE.LineBasicMaterial({
+      color: OPERATOR_COLORS.arrow,
+      transparent: true,
+      opacity: 0.85
+    });
+    const line = new THREE.Line(lineGeometry, lineMaterial);
+    line.userData = {
+      layerIndex: toMeta.layerIndex,
+      moduleKey: toMeta.key,
+      baseColor: OPERATOR_COLORS.arrow,
+      type: 'operator_arrow',
+      kind: 'arrow'
+    };
+    scene.add(line);
+    transformerObjects.push(line);
+
+    const coneGeometry = new THREE.ConeGeometry(is2D ? 0.24 : 0.28, is2D ? 0.7 : 0.8, 12);
+    const coneMaterial = new THREE.MeshPhongMaterial({
+      color: OPERATOR_COLORS.arrow,
+      transparent: true,
+      opacity: 0.9,
+      shininess: 120
+    });
+    const cone = new THREE.Mesh(coneGeometry, coneMaterial);
+    cone.position.copy(end);
+    cone.rotation.z = -Math.PI / 2;
+    cone.userData = {
+      layerIndex: toMeta.layerIndex,
+      moduleKey: toMeta.key,
+      baseColor: OPERATOR_COLORS.arrow,
+      type: 'operator_arrow_head',
+      kind: 'arrow'
+    };
+    scene.add(cone);
+    transformerObjects.push(cone);
+
+    if (label) {
+      const labelPos = start.clone().lerp(end, 0.5);
+      labelPos.y += 0.75;
+      createTextLabel(label, labelPos, is2D ? 0.54 : 0.5, '#94a3b8');
+    }
+  }
+
+  function updatePointerFromEvent(event) {
+    const rect = canvas3d.getBoundingClientRect();
+    pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+  }
+
+  function getOperatorObjectAtPointer() {
+    if (state.archType !== 'operator' || interactiveObjects.length === 0) return null;
+    raycaster.setFromCamera(pointer, camera);
+    const intersections = raycaster.intersectObjects(interactiveObjects, false);
+    return intersections.length ? intersections[0].object : null;
+  }
+
+  function updateOperatorDetailsPanel() {
+    if (!operatorDetails) return;
+    const activeObj = hoveredOperatorObject || selectedOperatorObject;
+    if (!activeObj || state.archType !== 'operator') {
+      operatorDetailsTitle.textContent = 'Select a block';
+      operatorDetailsType.textContent = 'Operator Block';
+      operatorDetailsMeta.innerHTML = '';
+      operatorDetailsDescription.textContent = 'Hover or click a module to inspect its role in the operator pipeline.';
+      return;
+    }
+    const { label, type, sublabel, description, dims, layerIndex, moduleKey } = activeObj.userData;
+    const prettyType = type
+      .replace('operator_', '')
+      .split('_')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
+    const isSelected = activeObj === selectedOperatorObject;
+    operatorDetailsTitle.textContent = label || 'Operator Block';
+    operatorDetailsType.textContent = isSelected ? `Selected • ${prettyType}` : prettyType;
+
+    const metaItems = [
+      { label: 'Stage', value: layerIndex + 1 },
+      { label: 'View', value: state.viewMode.toUpperCase() }
+    ];
+    if (sublabel) {
+      metaItems.push({ label: 'Shape', value: sublabel });
+    }
+    if (dims?.channels) {
+      metaItems.push({ label: 'Channels', value: dims.channels });
+    }
+    if (dims?.modes) {
+      metaItems.push({ label: 'Modes', value: dims.modes });
+    }
+    if (dims?.block) {
+      metaItems.push({ label: 'Block', value: dims.block });
+    }
+    operatorDetailsMeta.innerHTML = metaItems
+      .map(item => `<div><strong>${item.label}:</strong> ${item.value}</div>`)
+      .join('');
+
+    const detailText = description || `Module key: ${moduleKey}`;
+    operatorDetailsDescription.textContent = detailText;
+  }
+
+  function setOperatorSelection(obj) {
+    selectedOperatorObject = obj || null;
+    state.selectedOperatorKey = selectedOperatorObject?.userData?.moduleKey || null;
+    updateOperatorDetailsPanel();
+  }
+
+  function applyOperatorSelectionByKey(key) {
+    if (!key || state.archType !== 'operator') {
+      setOperatorSelection(null);
+      return;
+    }
+    const match = interactiveObjects.find(obj => obj.userData.moduleKey === key);
+    setOperatorSelection(match || null);
+  }
+
+  function handlePointerMove(event) {
+    updatePointerFromEvent(event);
+    if (state.archType !== 'operator') return;
+    if (isDragging && state.cameraMode === 'manual') return;
+    const nextHover = getOperatorObjectAtPointer();
+    if (hoveredOperatorObject !== nextHover) {
+      hoveredOperatorObject = nextHover;
+      updateOperatorDetailsPanel();
+    }
+  }
+
+  function handleOperatorClick(event) {
+    if (state.archType !== 'operator') return;
+    updatePointerFromEvent(event);
+    if (lastDragWasPan) {
+      lastDragWasPan = false;
+      return;
+    }
+    const clicked = getOperatorObjectAtPointer();
+    if (clicked) {
+      setOperatorSelection(clicked === selectedOperatorObject ? null : clicked);
+    } else {
+      setOperatorSelection(null);
+    }
+  }
+
+  function getOperatorStepCount() {
+    const spectralBlocks = state.architecture.operator?.spectralBlocks || 1;
+    return spectralBlocks + 4;
+  }
+
+  function updateOperatorLegendVisibility() {
+    if (!operatorLegend) return;
+    const isOperator = state.archType === 'operator';
+    operatorLegend.classList.toggle('hidden', !isOperator);
+    operatorDetails?.classList.toggle('hidden', !isOperator);
+    applyViewModeClass();
+    if (!isOperator) {
+      hoveredOperatorObject = null;
+      selectedOperatorObject = null;
+      state.selectedOperatorKey = null;
+    }
+    updateOperatorDetailsPanel();
+  }
+
+  function resetOperatorVisuals() {
+    transformerObjects.forEach(obj => {
+      const mat = obj.material;
+      if (!mat) return;
+      if (mat.emissive) {
+        mat.emissive.setHex(0x000000);
+        mat.emissiveIntensity = 0.85;
+      }
+      if (obj.userData?.baseColor && mat.color) {
+        mat.color.setHex(obj.userData.baseColor);
+      }
+    });
+  }
+
+  function highlightOperatorLayer(layerIndex, color, intensity = 0.95) {
+    transformerObjects
+      .filter(obj => obj.userData.layerIndex === layerIndex)
+      .forEach(obj => {
+        const mat = obj.material;
+        if (!mat) return;
+        if (mat.emissive) {
+          mat.emissive.setHex(color);
+          mat.emissiveIntensity = intensity;
+        } else if (mat.color) {
+          mat.color.setHex(color);
+        }
+      });
+  }
+
+  function applyOperatorInteractionHighlights() {
+    if (hoveredOperatorObject && hoveredOperatorObject !== selectedOperatorObject) {
+      highlightOperatorLayer(hoveredOperatorObject.userData.layerIndex, OPERATOR_COLORS.hover, 1.0);
+    }
+    if (selectedOperatorObject) {
+      highlightOperatorLayer(selectedOperatorObject.userData.layerIndex, OPERATOR_COLORS.selected, 1.05);
+    }
+  }
+
+  function getOperatorModules() {
+    const operatorCfg = state.architecture.operator;
+    const is2D = state.viewMode === '2d';
+    const spectralBlocks = Math.max(1, operatorCfg.spectralBlocks || 1);
+    const baseSpectralHeight = is2D ? 8.4 : 7.8;
+    const spectralHeightStep = Math.min(0.6, spectralBlocks * 0.08);
+    const widthScale = is2D ? 1.08 : 1;
+    const heightScale = is2D ? 1.05 : 1;
+    const spectralModes = Math.max(8, Math.round(operatorCfg.width / 4));
+
+    const modules = [
+      {
+        key: 'input',
+        label: 'Input',
+        sublabel: `N × ${operatorCfg.inputDim}`,
+        size: { x: 2.9 * widthScale, y: 8.6 * heightScale, z: 1.1 },
+        color: OPERATOR_COLORS.input.fill,
+        outlineColor: OPERATOR_COLORS.input.outline,
+        stackCount: 2,
+        stackOffset: 0.24,
+        type: 'operator_input',
+        dims: { channels: operatorCfg.inputDim },
+        description: 'Input coordinates or field values lifted into the operator pipeline.'
+      },
+      {
+        key: 'projection',
+        label: 'Projection',
+        sublabel: `N × ${operatorCfg.projectionDim}`,
+        size: { x: 3.3 * widthScale, y: 8.3 * heightScale, z: 1.15 },
+        color: OPERATOR_COLORS.projection.fill,
+        outlineColor: OPERATOR_COLORS.projection.outline,
+        stackCount: 2,
+        stackOffset: 0.26,
+        type: 'operator_projection',
+        dims: { channels: operatorCfg.projectionDim },
+        description: 'A learned linear lift maps inputs to a wider latent channel space.'
+      }
+    ];
+
+    for (let i = 0; i < spectralBlocks; i++) {
+      modules.push({
+        key: `spectral-${i + 1}`,
+        label: `Spectral ${i + 1}`,
+        sublabel: `${operatorCfg.width} × N`,
+        size: { x: 3.15 * widthScale, y: (baseSpectralHeight - spectralHeightStep + i * 0.1) * heightScale, z: 1.2 },
+        color: OPERATOR_COLORS.spectral.fill,
+        outlineColor: OPERATOR_COLORS.spectral.outline,
+        stackCount: 3,
+        stackOffset: 0.21,
+        type: 'operator_spectral',
+        dims: { channels: operatorCfg.width, modes: spectralModes, block: i + 1 },
+        description: `Spectral convolution ${i + 1} mixes global Fourier modes with learned filters.`,
+        userData: { block: i + 1 }
+      });
+    }
+
+    modules.push(
+      {
+        key: 'mlp',
+        label: 'MLP Head',
+        sublabel: `N × ${operatorCfg.mlpDim}`,
+        size: { x: 4.25 * widthScale, y: 9.4 * heightScale, z: 1.35 },
+        color: OPERATOR_COLORS.mlp.fill,
+        outlineColor: OPERATOR_COLORS.mlp.outline,
+        stackCount: 2,
+        stackOffset: 0.2,
+        type: 'operator_mlp',
+        dims: { channels: operatorCfg.mlpDim },
+        description: 'Point-wise MLP refines the latent operator output back into physical space.'
+      },
+      {
+        key: 'output',
+        label: 'Output',
+        sublabel: `N × ${operatorCfg.outputDim}`,
+        size: { x: 2.95 * widthScale, y: 8.6 * heightScale, z: 1.1 },
+        color: OPERATOR_COLORS.input.fill,
+        outlineColor: OPERATOR_COLORS.input.outline,
+        stackCount: 2,
+        stackOffset: 0.24,
+        type: 'operator_output',
+        dims: { channels: operatorCfg.outputDim },
+        description: 'Projected solution field returned to the original dimensionality.'
+      }
+    );
+
+    return modules;
+  }
+
+  function createOperatorNetwork() {
+    const modules = getOperatorModules();
+    const yBase = -8;
+    const baseSpacing = state.viewMode === '2d' ? 6.2 : 5.8;
+    const spacingDecay = state.viewMode === '2d' ? 0.985 : 0.97;
+    let spacing = baseSpacing;
+    let totalWidth = 0;
+
+    modules.forEach((module, index) => {
+      totalWidth += module.size.x;
+      if (index < modules.length - 1) {
+        totalWidth += spacing;
+        spacing *= spacingDecay;
+      }
+    });
+
+    let cursorX = -totalWidth / 2;
+    spacing = baseSpacing;
+    const moduleMeta = [];
+
+    modules.forEach((module, index) => {
+      cursorX += module.size.x / 2;
+      const meta = createLayerStack(module, new THREE.Vector3(cursorX, yBase, 0), index);
+      moduleMeta.push(meta);
+      cursorX += module.size.x / 2;
+      if (index < modules.length - 1) {
+        cursorX += spacing;
+        spacing *= spacingDecay;
+      }
+    });
+
+    operatorModuleMeta = moduleMeta;
+    camState.panX = 0;
+    camState.panY = 0;
+    camState.targetPanX = 0;
+    camState.targetPanY = 0;
+
+    const spectralBlocks = Math.max(1, state.architecture.operator?.spectralBlocks || 1);
+    const spectralStart = 2;
+    const spectralEnd = spectralStart + spectralBlocks - 1;
+
+    for (let i = 0; i < moduleMeta.length - 1; i++) {
+      let label = 'Linear';
+      if (i === 1) label = 'Permute';
+      else if (i >= spectralStart && i < spectralEnd) label = 'Spectral';
+      else if (i === spectralEnd) label = 'MLP';
+      createOperatorArrow(moduleMeta[i], moduleMeta[i + 1], label);
+    }
+
+    const gridSize = calculateGridSize('operator', state.architecture.operator);
+    camState.targetDistance = state.viewMode === '2d'
+      ? Math.max(54, gridSize * 0.74)
+      : Math.max(40, gridSize * 0.7);
+    camState.distance = camState.targetDistance;
+    updateOrthographicFrustum();
   }
 
   // --- CNN ARCHITECTURE BUILDERS ---
@@ -1028,9 +1634,21 @@ document.addEventListener('DOMContentLoaded', () => {
     else if (state.isTraining) { statusBadge.textContent = 'TRAINING'; statusBadge.style.backgroundColor = 'var(--green)'; }
     else { statusBadge.textContent = 'IDLE'; statusBadge.style.backgroundColor = '#4b5563'; }
     const currentArch = state.architecture[state.archType];
-    const layerCount = Array.isArray(currentArch) ? currentArch.length : (currentArch.encoderBlocks || 0) + (currentArch.decoderBlocks || 0) + (currentArch.experts || 0) + (currentArch.depth || 0);
-    const neuronCount = Array.isArray(currentArch) ? currentArch.reduce((s, l) => s + l.neurons, 0) : 'N/A';
-    document.getElementById('network-stats').textContent = `${layerCount} components • ${neuronCount} neurons`;
+    let layerCount = 0;
+    if (Array.isArray(currentArch)) {
+      layerCount = currentArch.length;
+    } else if (state.archType === 'operator') {
+      layerCount = getOperatorStepCount();
+    } else {
+      layerCount = (currentArch.encoderBlocks || 0) + (currentArch.decoderBlocks || 0) + (currentArch.experts || 0) + (currentArch.depth || 0);
+    }
+    const neuronValue = Array.isArray(currentArch)
+      ? currentArch.reduce((s, l) => s + l.neurons, 0)
+      : state.archType === 'operator'
+        ? currentArch.width
+        : 'N/A';
+    const neuronLabel = state.archType === 'operator' ? 'channels' : 'neurons';
+    document.getElementById('network-stats').textContent = `${layerCount} components • ${neuronValue} ${neuronLabel}`;
 
     document.getElementById('start-btn').classList.toggle('hidden', state.isTraining);
     document.getElementById('stop-btn').classList.toggle('hidden', !state.isTraining);
@@ -1055,6 +1673,10 @@ document.addEventListener('DOMContentLoaded', () => {
     panelDetailsContainer.style.display = state.activePanel ? 'block' : 'none';
     document.getElementById('camera-mode-toggle').checked = state.cameraMode === 'manual';
     document.getElementById('theme-toggle').checked = state.theme === 'light';
+    view3dBtn?.classList.toggle('active', state.viewMode === '3d');
+    view2dBtn?.classList.toggle('active', state.viewMode === '2d');
+    view3dBtn?.setAttribute('aria-pressed', String(state.viewMode === '3d'));
+    view2dBtn?.setAttribute('aria-pressed', String(state.viewMode === '2d'));
   }
 
   function getTransformerVariantDescription(variant) {
@@ -1104,6 +1726,22 @@ document.addEventListener('DOMContentLoaded', () => {
               <select id="cnn-variant-select" class="update-cnn-variant">
                 ${cnnVariants.map(variant => `<option value="${variant}" ${state.architecture.cnn.variant === variant ? 'selected' : ''}>${variant}</option>`).join('')}
               </select>
+            </div>
+          </div>`;
+        break;
+      case 'operator':
+        html = `<h3 style="color: var(--cyan);">Neural Operator</h3>
+          <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+            <div><label>Spectral Blocks:</label><input type="number" min="1" max="6" value="${state.architecture.operator.spectralBlocks}" class="update-arch-input" data-field="spectralBlocks"></div>
+            <div><label>Width (Channels):</label><input type="number" min="32" max="256" step="16" value="${state.architecture.operator.width}" class="update-arch-input" data-field="width"></div>
+            <div><label>Projection Dim:</label><input type="number" min="32" max="256" step="16" value="${state.architecture.operator.projectionDim}" class="update-arch-input" data-field="projectionDim"></div>
+            <div><label>MLP Dim:</label><input type="number" min="64" max="512" step="32" value="${state.architecture.operator.mlpDim}" class="update-arch-input" data-field="mlpDim"></div>
+            <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem;">
+              <div><label>Input Dim:</label><input type="number" min="1" max="16" value="${state.architecture.operator.inputDim}" class="update-arch-input" data-field="inputDim"></div>
+              <div><label>Output Dim:</label><input type="number" min="1" max="16" value="${state.architecture.operator.outputDim}" class="update-arch-input" data-field="outputDim"></div>
+            </div>
+            <div style="margin-top: 0.25rem; padding: 0.6rem; background: var(--layer-item-bg); border-radius: 4px; font-size: 0.75rem; border-left: 3px solid var(--cyan);">
+              Spectral operators lift inputs into a wider latent space, apply repeated spectral convolutions, then project back through an MLP head.
             </div>
           </div>`;
         break;
@@ -1281,6 +1919,8 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('opt-btn').addEventListener('click', () => handlePanelToggle('optimization'));
 	document.getElementById('settings-btn')?.addEventListener('click', () => handlePanelToggle('settings'));
   document.getElementById('speed-slider').addEventListener('input', e => { state.animationSpeed = parseFloat(e.target.value); updateUI(); });
+  view3dBtn?.addEventListener('click', () => switchViewMode('3d'));
+  view2dBtn?.addEventListener('click', () => switchViewMode('2d'));
 
   document.getElementById('camera-mode-toggle').addEventListener('change', e => {
     state.cameraMode = e.target.checked ? 'manual' : 'auto';
@@ -1340,9 +1980,17 @@ document.addEventListener('DOMContentLoaded', () => {
       // Generic architecture config updates
       if (e.target.classList.contains('update-arch-input')) {
           const { field } = e.target.dataset;
-          const value = parseInt(e.target.value);
+          const min = e.target.min ? parseInt(e.target.min, 10) : -Infinity;
+          const max = e.target.max ? parseInt(e.target.max, 10) : Infinity;
+          let value = parseInt(e.target.value, 10);
+          if (Number.isNaN(value)) return;
+          value = Math.min(max, Math.max(min, value));
+          e.target.value = value;
           if (state.architecture[state.archType]) {
               state.architecture[state.archType][field] = value;
+              if (state.archType === 'operator') {
+                  state.animationStep = state.animationStep % getOperatorStepCount();
+              }
               createNetwork();
               renderArchitecturePanel(); // Re-render panel after change
           }
@@ -1436,6 +2084,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (state.archType === 'cnn') {
             state.animationStep = (state.animationStep + 1) % 12; // Generic 12 steps for longer CNNs
         }
+        if (state.archType === 'operator') {
+            state.animationStep = (state.animationStep + 1) % getOperatorStepCount();
+        }
         if (state.archType === 'moe') {
             // Enhanced MoE simulation with multiple layers
             const { expertLayers, top_k } = state.architecture.moe;
@@ -1504,20 +2155,40 @@ document.addEventListener('DOMContentLoaded', () => {
     const tick = clock.getDelta();
 
     if (state.cameraMode === 'auto') {
-      camState.distance = THREE.MathUtils.lerp(camState.distance, camState.targetDistance, 0.02);
-      camera.position.set(Math.cos(deltaTime * 0.15) * camState.distance, camState.distance * 0.4, Math.sin(deltaTime * 0.15) * camState.distance);
-      camera.lookAt(0, 0, 0);
+      camState.targetPanX = 0;
+      camState.targetPanY = 0;
+    }
+
+    const cameraLerp = state.cameraMode === 'auto' ? 0.04 : 0.12;
+    camState.distance = THREE.MathUtils.lerp(camState.distance, camState.targetDistance, cameraLerp);
+    camState.panX = THREE.MathUtils.lerp(camState.panX, camState.targetPanX, cameraLerp);
+    camState.panY = THREE.MathUtils.lerp(camState.panY, camState.targetPanY, cameraLerp);
+
+    if (state.viewMode === '2d') {
+      camera = orthographicCamera;
+      updateOrthographicFrustum();
+      camera.position.set(camState.panX, camState.panY, camState.distance);
+      camera.lookAt(camState.panX, camState.panY, 0);
+    } else if (state.cameraMode === 'auto') {
+      camera = perspectiveCamera;
+      const orbitHeight = state.archType === 'operator' ? 0.34 : 0.4;
+      camera.position.set(
+        Math.cos(deltaTime * 0.15) * camState.distance + camState.panX,
+        camState.distance * orbitHeight + camState.panY,
+        Math.sin(deltaTime * 0.15) * camState.distance
+      );
+      camera.lookAt(camState.panX, camState.panY, 0);
     } else {
-      const lerp = 0.08;
-      camState.distance = THREE.MathUtils.lerp(camState.distance, camState.targetDistance, lerp);
+      camera = perspectiveCamera;
+      const lerp = 0.1;
       camState.angleX = THREE.MathUtils.lerp(camState.angleX, camState.targetAngleX, lerp);
       camState.angleY = THREE.MathUtils.lerp(camState.angleY, camState.targetAngleY, lerp);
       camera.position.set(
-        Math.cos(camState.angleX) * Math.cos(camState.angleY) * camState.distance,
-        Math.sin(camState.angleY) * camState.distance,
+        Math.cos(camState.angleX) * Math.cos(camState.angleY) * camState.distance + camState.panX,
+        Math.sin(camState.angleY) * camState.distance + camState.panY,
         Math.sin(camState.angleX) * Math.cos(camState.angleY) * camState.distance
       );
-      camera.lookAt(0, 0, 0);
+      camera.lookAt(camState.panX, camState.panY, 0);
     }
 
     // Update particles
@@ -1670,6 +2341,11 @@ document.addEventListener('DOMContentLoaded', () => {
                   if (o.material && o.material.emissive) o.material.emissive.setHex(0x00ff00);
               });
           }
+      } else if (state.archType === 'operator') {
+          const step = state.animationStep % getOperatorStepCount();
+          resetOperatorVisuals();
+          highlightOperatorLayer(step, OPERATOR_COLORS.highlight, 1.0);
+          applyOperatorInteractionHighlights();
       } else if (state.archType === 'moe') {
           const activeExpertsData = state.animationStep?.activeExperts || [];
           const router_fnn = transformerObjects.find(o => o.userData.type === 'moe_router_fnn');
@@ -1740,14 +2416,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // --- INITIALIZATION ---
   window.addEventListener('resize', () => {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
+    setActiveCamera();
+    updateGridVisibility();
   });
 
+  setActiveCamera();
+  applyViewModeClass();
+  applyTheme();
   archTypeSelect.value = state.archType;
   createNetwork();
   updateUI();
-  applyTheme();
   animate();
 });

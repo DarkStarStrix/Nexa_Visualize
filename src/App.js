@@ -1,2 +1,5 @@
-// No longer needed. See public/index.html and public/main.js for new implementation.
+function App() {
+  return <div data-testid="app-shell" aria-hidden="true" />;
+}
 
+export default App;
