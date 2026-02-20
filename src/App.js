@@ -1,5 +1,7 @@
+import VisualizerFeature from './features/visualizer/VisualizerFeature';
+
 function App() {
-  return <div data-testid="app-shell" aria-hidden="true" />;
+  return <VisualizerFeature />;
 }
 
 export default App;

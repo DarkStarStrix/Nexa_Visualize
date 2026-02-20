@@ -1,4 +1,6 @@
-document.addEventListener('DOMContentLoaded', () => {
+import * as THREE from 'three';
+
+export function initVisualizer() {
   // --- STATE MANAGEMENT (from NeuralNetwork3D.tsx) ---
   let state = {
     isTraining: false,
@@ -2428,4 +2430,4 @@ document.addEventListener('DOMContentLoaded', () => {
   createNetwork();
   updateUI();
   animate();
-});
+}
