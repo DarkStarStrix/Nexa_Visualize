@@ -15,9 +15,9 @@
   },
   "scripts": {
     "start": "react-scripts start",
-    "build": "react-scripts build",
+    "build": "BROWSERSLIST_IGNORE_OLD_DATA=true react-scripts build",
     "test": "react-scripts test",
-    "lint": "eslint \"src/**/*.{js,jsx,ts,tsx}\"",
+    "lint": "BROWSERSLIST_IGNORE_OLD_DATA=true eslint \"src/**/*.{js,jsx,ts,tsx}\"",
     "eject": "react-scripts eject"
   },
   "eslintConfig": {
