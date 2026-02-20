@@ -1,7 +1,19 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import * as THREE from 'three';
+import {
+  DEFAULT_ARCHITECTURE,
+  DEFAULT_CAMERA_STATE,
+  DEFAULT_SESSION_STATE,
+  DEFAULT_TRAINING_PARAMS,
+  generateSessionId,
+  parseSessionPayload,
+  serializeSession
+} from './domain/sessionSchema';
 
-const NeuralNetwork3D = () => {
+const LOCAL_DRAFT_KEY = 'nexa.visualize.session.draft';
+const SHARED_PREFIX = 'nexa.visualize.session.shared.';
+
+const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
   const mountRef = useRef(null);
   const sceneRef = useRef(null);
   const rendererRef = useRef(null);
@@ -20,36 +32,20 @@ const NeuralNetwork3D = () => {
   const [loss, setLoss] = useState(1.0);
   const [accuracy, setAccuracy] = useState(0.1);
   const [isTrainingComplete, setIsTrainingComplete] = useState(false);
-  const [activePanel, setActivePanel] = useState(null);
-  const [cameraMode, setCameraMode] = useState('auto');
-  const [animationSpeed, setAnimationSpeed] = useState(1.0);
+  const [activePanel, setActivePanel] = useState(DEFAULT_SESSION_STATE.uiState.activePanel);
+  const [cameraMode, setCameraMode] = useState(DEFAULT_SESSION_STATE.cameraMode);
+  const [animationSpeed, setAnimationSpeed] = useState(DEFAULT_SESSION_STATE.uiState.animationSpeed);
+  const [selectedModel, setSelectedModel] = useState(DEFAULT_SESSION_STATE.selectedModel);
+  const [statusMessage, setStatusMessage] = useState('');
 
   // Architecture customization
-  const [architecture, setArchitecture] = useState([
-    { neurons: 4, activation: 'Linear', name: 'Input' },
-    { neurons: 8, activation: 'ReLU', name: 'Hidden 1' },
-    { neurons: 6, activation: 'ReLU', name: 'Hidden 2' },
-    { neurons: 3, activation: 'Softmax', name: 'Output' }
-  ]);
+  const [architecture, setArchitecture] = useState(DEFAULT_ARCHITECTURE);
 
   // Training parameters
-  const [trainingParams, setTrainingParams] = useState({
-    learningRate: 0.01,
-    batchSize: 32,
-    epochs: 100,
-    optimizer: 'Adam',
-    lossFunction: 'CrossEntropy'
-  });
+  const [trainingParams, setTrainingParams] = useState(DEFAULT_TRAINING_PARAMS);
 
   // Manual camera state
-  const [cameraState, setCameraState] = useState({
-    distance: 15,
-    angleX: 0,
-    angleY: 0.3,
-    targetDistance: 15,
-    targetAngleX: 0,
-    targetAngleY: 0.3
-  });
+  const [cameraState, setCameraState] = useState(DEFAULT_CAMERA_STATE);
 
   // Generate optimized layer configuration
   const layers = useMemo(() => {
@@ -502,7 +498,7 @@ const NeuralNetwork3D = () => {
 
     window.addEventListener('resize', handleResize);
 
-    return () => {
+  return () => {
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
       }
@@ -589,7 +585,7 @@ const NeuralNetwork3D = () => {
       }
     }, 200 / animationSpeed);
 
-    return () => clearInterval(interval);
+  return () => clearInterval(interval);
   }, [isTraining, isTrainingComplete, trainingParams, batch, animationSpeed]);
 
   // UI Helper functions
@@ -641,6 +637,98 @@ const NeuralNetwork3D = () => {
     setActivePanel(activePanel === panelName ? null : panelName);
   };
 
+  const buildSession = useCallback(() => ({
+    architecture,
+    trainingParams,
+    cameraMode,
+    cameraState,
+    selectedModel,
+    uiState: {
+      activePanel,
+      animationSpeed
+    }
+  }), [architecture, trainingParams, cameraMode, cameraState, selectedModel, activePanel, animationSpeed]);
+
+  const applySession = useCallback((rawSession) => {
+    const { session, error } = parseSessionPayload(rawSession);
+    if (error || !session) {
+      setStatusMessage(error || 'Session payload is invalid.');
+      return false;
+    }
+
+    setArchitecture(session.architecture);
+    setTrainingParams(session.trainingParams);
+    setCameraMode(session.cameraMode);
+    setCameraState(session.cameraState);
+    setSelectedModel(session.selectedModel);
+    setActivePanel(session.uiState.activePanel);
+    setAnimationSpeed(session.uiState.animationSpeed);
+    setStatusMessage('Session loaded.');
+    return true;
+  }, []);
+
+  const saveDraftSession = useCallback(() => {
+    const payload = serializeSession(buildSession());
+    localStorage.setItem(LOCAL_DRAFT_KEY, payload);
+    setStatusMessage('Session saved to local storage.');
+  }, [buildSession]);
+
+  const loadDraftSession = useCallback(() => {
+    const payload = localStorage.getItem(LOCAL_DRAFT_KEY);
+    if (!payload) {
+      setStatusMessage('No saved local session found.');
+      return;
+    }
+
+    applySession(payload);
+  }, [applySession]);
+
+  const exportSession = useCallback(() => {
+    const blob = new Blob([serializeSession(buildSession())], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = 'nexa-visualize-session.json';
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setStatusMessage('Session exported as JSON.');
+  }, [buildSession]);
+
+  const importSession = useCallback((event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (loadEvent) => {
+      applySession(loadEvent.target?.result);
+    };
+    reader.readAsText(file);
+    event.target.value = '';
+  }, [applySession]);
+
+  const createShareLink = useCallback(() => {
+    const newSessionId = generateSessionId();
+    const payload = serializeSession(buildSession());
+    localStorage.setItem(`${SHARED_PREFIX}${newSessionId}`, payload);
+    if (onSessionRouteChange) {
+      onSessionRouteChange(newSessionId);
+    }
+    setStatusMessage(`Share link ready: /session/${newSessionId}`);
+  }, [buildSession, onSessionRouteChange]);
+
+
+  useEffect(() => {
+    if (!sessionId) return;
+
+    const sharedPayload = localStorage.getItem(`${SHARED_PREFIX}${sessionId}`);
+    if (!sharedPayload) {
+      setStatusMessage(`Session ${sessionId} not found in local storage.`);
+      return;
+    }
+
+    applySession(sharedPayload);
+  }, [sessionId, applySession]);
+
   return (
     <div className="w-full h-screen bg-gray-900 relative overflow-hidden">
       <div ref={mountRef} className="w-full h-full" />
@@ -659,6 +747,8 @@ const NeuralNetwork3D = () => {
         <div className="text-xs text-gray-300">
           {architecture.length} layers • {architecture.reduce((sum, layer) => sum + layer.neurons, 0)} neurons
         </div>
+        <div className="text-xs text-cyan-300 mt-1">Model: {selectedModel}</div>
+        {statusMessage && <div className="text-xs text-yellow-300 mt-1">{statusMessage}</div>}
       </div>
 
       {/* Controls */}
@@ -724,6 +814,47 @@ const NeuralNetwork3D = () => {
               />
               <span className="w-8">{animationSpeed.toFixed(1)}x</span>
             </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-1 mb-2">
+            <button
+              onClick={saveDraftSession}
+              className="bg-blue-700 hover:bg-blue-800 text-white px-2 py-1 rounded text-xs font-medium"
+            >
+              Save Local
+            </button>
+            <button
+              onClick={loadDraftSession}
+              className="bg-blue-700 hover:bg-blue-800 text-white px-2 py-1 rounded text-xs font-medium"
+            >
+              Load Local
+            </button>
+            <button
+              onClick={createShareLink}
+              className="bg-indigo-700 hover:bg-indigo-800 text-white px-2 py-1 rounded text-xs font-medium"
+            >
+              Share Link
+            </button>
+            <button
+              onClick={exportSession}
+              className="bg-gray-600 hover:bg-gray-700 text-white px-2 py-1 rounded text-xs font-medium"
+            >
+              Export JSON
+            </button>
+            <label className="bg-gray-600 hover:bg-gray-700 text-white px-2 py-1 rounded text-xs font-medium text-center cursor-pointer">
+              Import JSON
+              <input type="file" accept="application/json" onChange={importSession} className="hidden" />
+            </label>
+            <select
+              value={selectedModel}
+              onChange={(e) => setSelectedModel(e.target.value)}
+              className="bg-gray-700 text-white px-2 py-1 rounded text-xs"
+            >
+              <option value="Custom">Custom</option>
+              <option value="CNN">CNN</option>
+              <option value="Transformer">Transformer</option>
+              <option value="MLP">MLP</option>
+            </select>
           </div>
 
           <div className="flex gap-2">

@@ -1,7 +1,9 @@
 import { render, screen } from '@testing-library/react';
 import App from './App';
 
-test('renders the application shell without crashing', () => {
+jest.mock('./NeuralNetwork3D', () => () => <div>Nexa Visualize</div>);
+
+test('renders the visualization shell', () => {
   render(<App />);
-  expect(screen.getByTestId('app-shell')).toBeInTheDocument();
+  expect(screen.getByText('Nexa Visualize')).toBeInTheDocument();
 });
