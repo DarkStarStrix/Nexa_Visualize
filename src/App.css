@@ -1,38 +1,137 @@
-.App {
-  text-align: center;
+:root {
+  color-scheme: dark;
 }
 
-.App-logo {
-  height: 40vmin;
-  pointer-events: none;
+* {
+  box-sizing: border-box;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  .App-logo {
-    animation: App-logo-spin infinite 20s linear;
-  }
-}
-
-.App-header {
-  background-color: #282c34;
+.app-shell {
   min-height: 100vh;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+.skip-link {
+  position: absolute;
+  left: -999px;
+  top: 0;
+}
+
+.skip-link:focus-visible {
+  left: 0;
+  z-index: 100;
+  background: #f8fafc;
+  color: #020617;
+  padding: 0.5rem 0.75rem;
+}
+
+.top-nav {
   display: flex;
-  flex-direction: column;
+  justify-content: space-between;
   align-items: center;
-  justify-content: center;
-  font-size: calc(10px + 2vmin);
-  color: white;
+  gap: 1rem;
+  padding: 1rem;
+  border-bottom: 1px solid #334155;
 }
 
-.App-link {
-  color: #61dafb;
+.top-nav nav,
+footer nav {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
 }
 
-@keyframes App-logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+a {
+  color: #93c5fd;
+}
+
+.top-nav a,
+footer a {
+  text-decoration: none;
+  background: #1e293b;
+  border: 1px solid #475569;
+  border-radius: 0.375rem;
+  padding: 0.4rem 0.6rem;
+  color: #f8fafc;
+}
+
+.top-nav a.active {
+  background: #0369a1;
+}
+
+main {
+  padding: 1rem;
+}
+
+.visualizer-wrap {
+  border: 1px solid #334155;
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+
+.helper-text {
+  color: #bfdbfe;
+}
+
+.markdown {
+  margin: 1rem 0;
+  padding: 1rem;
+  border: 1px solid #334155;
+  border-radius: 0.5rem;
+  background: #020617;
+  max-height: 24rem;
+  overflow: auto;
+}
+
+.markdown pre {
+  overflow: auto;
+  background: #111827;
+  padding: 0.75rem;
+  border-radius: 0.4rem;
+}
+
+button,
+input,
+select,
+a {
+  font: inherit;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+a:focus-visible {
+  outline: 3px solid #facc15;
+  outline-offset: 2px;
+}
+
+footer {
+  border-top: 1px solid #334155;
+  padding: 1rem;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.8);
+  display: grid;
+  place-items: center;
+  z-index: 100;
+}
+
+.modal-card {
+  width: min(90vw, 40rem);
+  background: #111827;
+  border: 1px solid #64748b;
+  border-radius: 0.5rem;
+  padding: 1rem;
+}
+
+.modal-card button {
+  background: #0369a1;
+  color: #f8fafc;
+  border: 0;
+  border-radius: 0.4rem;
+  padding: 0.5rem 0.75rem;
 }
