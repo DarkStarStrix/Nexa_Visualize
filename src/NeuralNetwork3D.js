@@ -23,10 +23,10 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
   const connectionsRef = useRef([]);
   const animationProgressRef = useRef(0);
   const optimizationBallRef = useRef(null);
-  const optimizationHistoryRef = useRef([]);
+  const cameraDistanceRef = useRef(DEFAULT_CAMERA_STATE.distance);
+  const lossRef = useRef(1.0);
 
   const [isTraining, setIsTraining] = useState(false);
-  const [currentPhase, setCurrentPhase] = useState('idle');
   const [epoch, setEpoch] = useState(0);
   const [batch, setBatch] = useState(0);
   const [loss, setLoss] = useState(1.0);
@@ -46,6 +46,14 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
 
   // Manual camera state
   const [cameraState, setCameraState] = useState(DEFAULT_CAMERA_STATE);
+
+  useEffect(() => {
+    cameraDistanceRef.current = cameraState.distance;
+  }, [cameraState.distance]);
+
+  useEffect(() => {
+    lossRef.current = loss;
+  }, [loss]);
 
   // Generate optimized layer configuration
   const layers = useMemo(() => {
@@ -258,6 +266,7 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
 
   useEffect(() => {
     if (!mountRef.current) return;
+    const mountNode = mountRef.current;
 
     // Scene setup
     const scene = new THREE.Scene();
@@ -267,7 +276,7 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
     // Camera setup
     const camera = new THREE.PerspectiveCamera(
       75,
-      mountRef.current.clientWidth / mountRef.current.clientHeight,
+      mountNode.clientWidth / mountNode.clientHeight,
       0.1,
       1000
     );
@@ -278,11 +287,11 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
       antialias: true,
       powerPreference: "high-performance"
     });
-    renderer.setSize(mountRef.current.clientWidth, mountRef.current.clientHeight);
+    renderer.setSize(mountNode.clientWidth, mountNode.clientHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    mountRef.current.appendChild(renderer.domElement);
+    mountNode.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
     // Enhanced lighting
@@ -347,10 +356,10 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
       }
     };
 
-    mountRef.current.addEventListener('mousedown', onMouseDown);
-    mountRef.current.addEventListener('mousemove', onMouseMove);
-    mountRef.current.addEventListener('mouseup', onMouseUp);
-    mountRef.current.addEventListener('wheel', onWheel, { passive: false });
+    mountNode.addEventListener('mousedown', onMouseDown);
+    mountNode.addEventListener('mousemove', onMouseMove);
+    mountNode.addEventListener('mouseup', onMouseUp);
+    mountNode.addEventListener('wheel', onWheel, { passive: false });
 
     // Main animation loop - SIMPLIFIED AND RELIABLE
     const animate = (currentTime) => {
@@ -359,7 +368,7 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
       // Camera positioning
       if (cameraMode === 'auto') {
         const time = deltaTime * 0.3;
-        const distance = cameraState.distance;
+        const distance = cameraDistanceRef.current;
         camera.position.x = Math.cos(time) * distance;
         camera.position.z = Math.sin(time) * distance;
         camera.position.y = distance * 0.4;
@@ -477,9 +486,9 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
       if (optimizationBallRef.current && isTraining) {
         const ball = optimizationBallRef.current;
         const time = deltaTime * 2;
-        ball.position.x = Math.cos(time) * (3 - loss * 2.5);
-        ball.position.z = Math.sin(time) * (3 - loss * 2.5);
-        ball.position.y = -6 + loss * 2;
+        ball.position.x = Math.cos(time) * (3 - lossRef.current * 2.5);
+        ball.position.z = Math.sin(time) * (3 - lossRef.current * 2.5);
+        ball.position.y = -6 + lossRef.current * 2;
       }
 
       renderer.render(scene, camera);
@@ -490,10 +499,10 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
 
     // Handle resize
     const handleResize = () => {
-      if (!mountRef.current) return;
-      camera.aspect = mountRef.current.clientWidth / mountRef.current.clientHeight;
+      if (!mountNode) return;
+      camera.aspect = mountNode.clientWidth / mountNode.clientHeight;
       camera.updateProjectionMatrix();
-      renderer.setSize(mountRef.current.clientWidth, mountRef.current.clientHeight);
+      renderer.setSize(mountNode.clientWidth, mountNode.clientHeight);
     };
 
     window.addEventListener('resize', handleResize);
@@ -502,12 +511,12 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
       }
-      if (mountRef.current && renderer.domElement) {
-        mountRef.current.removeChild(renderer.domElement);
-        mountRef.current.removeEventListener('mousedown', onMouseDown);
-        mountRef.current.removeEventListener('mousemove', onMouseMove);
-        mountRef.current.removeEventListener('mouseup', onMouseUp);
-        mountRef.current.removeEventListener('wheel', onWheel);
+      if (mountNode && renderer.domElement) {
+        mountNode.removeChild(renderer.domElement);
+        mountNode.removeEventListener('mousedown', onMouseDown);
+        mountNode.removeEventListener('mousemove', onMouseMove);
+        mountNode.removeEventListener('mouseup', onMouseUp);
+        mountNode.removeEventListener('wheel', onWheel);
       }
       window.removeEventListener('resize', handleResize);
 
@@ -731,7 +740,7 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
 
   return (
     <div className="w-full h-screen bg-gray-900 relative overflow-hidden">
-      <div ref={mountRef} className="w-full h-full" />
+      <div ref={mountRef} data-testid="three-canvas-mount" className="w-full h-full" />
 
       {/* Header */}
       <div className="absolute top-4 left-4 bg-black bg-opacity-90 text-white p-3 rounded-lg backdrop-blur-sm">
@@ -893,7 +902,7 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
           </div>
           <div>
             <div className="text-xs text-gray-400">Batch</div>
-            <div className="text-lg font-bold text-blue-400">{batch}</div>
+            <div aria-label="Batch value" className="text-lg font-bold text-blue-400">{batch}</div>
           </div>
           <div>
             <div className="text-xs text-gray-400">Loss</div>
@@ -912,7 +921,10 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
 
       {/* Active Panel */}
       {activePanel && (
-        <div className="absolute top-24 right-4 bg-black bg-opacity-95 text-white rounded-lg backdrop-blur-sm max-w-sm max-h-96 overflow-y-auto">
+        <div
+          data-testid="config-panel"
+          className="absolute top-24 right-4 bg-black bg-opacity-95 text-white rounded-lg backdrop-blur-sm max-w-sm max-h-96 overflow-y-auto"
+        >
           {activePanel === 'architecture' && (
             <div className="p-4">
               <h3 className="text-sm font-bold mb-3 text-purple-400">Network Architecture</h3>
@@ -1038,4 +1050,3 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
 };
 
 export default NeuralNetwork3D;
-

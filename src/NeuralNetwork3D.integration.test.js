@@ -25,8 +25,8 @@ describe('NeuralNetwork3D integration tests', () => {
       jest.advanceTimersByTime(1000);
     });
 
-    const batchLabel = screen.getByText(/^Batch$/);
-    expect(batchLabel.nextElementSibling.textContent).not.toBe('0');
+    const batchValue = screen.getByLabelText('Batch value');
+    expect(batchValue).not.toHaveTextContent('0');
 
     await userEvent.click(screen.getByRole('button', { name: /^stop$/i }));
     expect(screen.getByText('IDLE')).toBeInTheDocument();
@@ -60,7 +60,7 @@ describe('NeuralNetwork3D integration tests', () => {
   test('three canvas mounts and unmounts without renderer leaks', () => {
     const startingCount = THREE.__mockRendererInstances.length;
     const { unmount } = render(<NeuralNetwork3D />);
-    expect(screen.getByTestId('three-canvas-mount').querySelector('canvas')).toBeInTheDocument();
+    expect(screen.getByTestId('three-canvas-mount')).toContainElement(screen.getByTestId('three-renderer-canvas'));
 
     unmount();
 
