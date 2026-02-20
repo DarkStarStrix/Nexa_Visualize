@@ -13,6 +13,47 @@ import {
 const LOCAL_DRAFT_KEY = 'nexa.visualize.session.draft';
 const SHARED_PREFIX = 'nexa.visualize.session.shared.';
 
+const MODEL_PRESETS = {
+  Custom: DEFAULT_ARCHITECTURE,
+  MLP: DEFAULT_ARCHITECTURE,
+  CNN: [
+    { neurons: 16, activation: 'Linear', name: 'Input Image' },
+    { neurons: 24, activation: 'ReLU', name: 'Conv Block 1' },
+    { neurons: 20, activation: 'ReLU', name: 'Conv Block 2' },
+    { neurons: 12, activation: 'ReLU', name: 'Dense' },
+    { neurons: 4, activation: 'Softmax', name: 'Output' }
+  ],
+  Transformer: [
+    { neurons: 12, activation: 'Linear', name: 'Token Input' },
+    { neurons: 18, activation: 'ReLU', name: 'Self-Attention 1' },
+    { neurons: 18, activation: 'ReLU', name: 'Self-Attention 2' },
+    { neurons: 14, activation: 'ReLU', name: 'Feed Forward' },
+    { neurons: 6, activation: 'Softmax', name: 'Output Head' }
+  ],
+  'Neural Operator': [
+    { neurons: 10, activation: 'Linear', name: 'Input Field' },
+    { neurons: 16, activation: 'ReLU', name: 'Projection' },
+    { neurons: 20, activation: 'ReLU', name: 'Spectral Block 1' },
+    { neurons: 20, activation: 'ReLU', name: 'Spectral Block 2' },
+    { neurons: 10, activation: 'Linear', name: 'Output Field' }
+  ],
+  MoE: [
+    { neurons: 10, activation: 'Linear', name: 'Token Input' },
+    { neurons: 8, activation: 'ReLU', name: 'Gating' },
+    { neurons: 24, activation: 'ReLU', name: 'Experts' },
+    { neurons: 12, activation: 'ReLU', name: 'Router Merge' },
+    { neurons: 5, activation: 'Softmax', name: 'Output' }
+  ],
+  Autoencoder: [
+    { neurons: 14, activation: 'Linear', name: 'Input' },
+    { neurons: 10, activation: 'ReLU', name: 'Encoder 1' },
+    { neurons: 6, activation: 'ReLU', name: 'Latent' },
+    { neurons: 10, activation: 'ReLU', name: 'Decoder 1' },
+    { neurons: 14, activation: 'Linear', name: 'Reconstruction' }
+  ]
+};
+
+
 const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
   const mountRef = useRef(null);
   const sceneRef = useRef(null);
@@ -23,10 +64,16 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
   const connectionsRef = useRef([]);
   const animationProgressRef = useRef(0);
   const optimizationBallRef = useRef(null);
-  const optimizationHistoryRef = useRef([]);
+  const cameraDistanceRef = useRef(DEFAULT_CAMERA_STATE.distance);
+  const lossRef = useRef(1.0);
+  const isTrainingRef = useRef(false);
+  const isTrainingCompleteRef = useRef(false);
+  const cameraModeRef = useRef(DEFAULT_SESSION_STATE.cameraMode);
+  const animationSpeedRef = useRef(DEFAULT_SESSION_STATE.uiState.animationSpeed);
+  const createNetworkRef = useRef(null);
+  const layersLengthRef = useRef(DEFAULT_ARCHITECTURE.length);
 
   const [isTraining, setIsTraining] = useState(false);
-  const [currentPhase, setCurrentPhase] = useState('idle');
   const [epoch, setEpoch] = useState(0);
   const [batch, setBatch] = useState(0);
   const [loss, setLoss] = useState(1.0);
@@ -46,6 +93,30 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
 
   // Manual camera state
   const [cameraState, setCameraState] = useState(DEFAULT_CAMERA_STATE);
+
+  useEffect(() => {
+    cameraDistanceRef.current = cameraState.distance;
+  }, [cameraState.distance]);
+
+  useEffect(() => {
+    lossRef.current = loss;
+  }, [loss]);
+
+  useEffect(() => {
+    isTrainingRef.current = isTraining;
+  }, [isTraining]);
+
+  useEffect(() => {
+    isTrainingCompleteRef.current = isTrainingComplete;
+  }, [isTrainingComplete]);
+
+  useEffect(() => {
+    cameraModeRef.current = cameraMode;
+  }, [cameraMode]);
+
+  useEffect(() => {
+    animationSpeedRef.current = animationSpeed;
+  }, [animationSpeed]);
 
   // Generate optimized layer configuration
   const layers = useMemo(() => {
@@ -77,6 +148,10 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
       };
     });
   }, [architecture]);
+
+  useEffect(() => {
+    layersLengthRef.current = layers.length;
+  }, [layers.length]);
 
   // Calculate optimal camera distance based on network size
   const calculateOptimalDistance = useCallback(() => {
@@ -199,14 +274,19 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
     }));
   }, [layers, calculateOptimalDistance]);
 
-  // Create loss landscape for optimization view
-  const createLossLandscape = useCallback(() => {
-    const scene = sceneRef.current;
-    if (!scene || activePanel !== 'optimization') return;
+  useEffect(() => {
+    createNetworkRef.current = createNetwork;
+  }, [createNetwork]);
 
-    // Remove existing landscape
+  // Create loss landscape for optimization view
+  const createLossLandscape = useCallback((showLandscape) => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+
     const existingLandscape = scene.getObjectByName('lossLandscape');
     if (existingLandscape) scene.remove(existingLandscape);
+
+    if (!showLandscape) return;
 
     // Create 3D loss surface
     const landscapeGroup = new THREE.Group();
@@ -224,7 +304,7 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
       // Create realistic loss landscape with local minima
       const height = 2 * Math.exp(-0.1 * (x*x + z*z)) +
                    0.5 * Math.sin(x * 0.5) * Math.cos(z * 0.5) +
-                   0.3 * Math.random();
+                   0.2 * Math.sin((x + z) * 0.35);
       vertices[i + 1] = height;
     }
     geometry.attributes.position.needsUpdate = true;
@@ -254,10 +334,11 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
     landscapeGroup.add(ball);
 
     scene.add(landscapeGroup);
-  }, [activePanel]);
+  }, []);
 
   useEffect(() => {
     if (!mountRef.current) return;
+    const mountNode = mountRef.current;
 
     // Scene setup
     const scene = new THREE.Scene();
@@ -267,7 +348,7 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
     // Camera setup
     const camera = new THREE.PerspectiveCamera(
       75,
-      mountRef.current.clientWidth / mountRef.current.clientHeight,
+      mountNode.clientWidth / mountNode.clientHeight,
       0.1,
       1000
     );
@@ -278,11 +359,11 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
       antialias: true,
       powerPreference: "high-performance"
     });
-    renderer.setSize(mountRef.current.clientWidth, mountRef.current.clientHeight);
+    renderer.setSize(mountNode.clientWidth, mountNode.clientHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    mountRef.current.appendChild(renderer.domElement);
+    mountNode.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
     // Enhanced lighting
@@ -305,21 +386,21 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
     gridHelper.position.y = -8;
     scene.add(gridHelper);
 
-    createNetwork();
+    createNetworkRef.current?.();
 
     // Mouse controls
     let isDragging = false;
     let previousMousePosition = { x: 0, y: 0 };
 
     const onMouseDown = (event) => {
-      if (cameraMode === 'manual') {
+      if (cameraModeRef.current === 'manual') {
         isDragging = true;
         previousMousePosition = { x: event.clientX, y: event.clientY };
       }
     };
 
     const onMouseMove = (event) => {
-      if (isDragging && cameraMode === 'manual') {
+      if (isDragging && cameraModeRef.current === 'manual') {
         const deltaX = (event.clientX - previousMousePosition.x) * 0.008;
         const deltaY = (event.clientY - previousMousePosition.y) * 0.008;
 
@@ -338,7 +419,7 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
     };
 
     const onWheel = (event) => {
-      if (cameraMode === 'manual') {
+      if (cameraModeRef.current === 'manual') {
         event.preventDefault();
         setCameraState(prev => ({
           ...prev,
@@ -347,19 +428,19 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
       }
     };
 
-    mountRef.current.addEventListener('mousedown', onMouseDown);
-    mountRef.current.addEventListener('mousemove', onMouseMove);
-    mountRef.current.addEventListener('mouseup', onMouseUp);
-    mountRef.current.addEventListener('wheel', onWheel, { passive: false });
+    mountNode.addEventListener('mousedown', onMouseDown);
+    mountNode.addEventListener('mousemove', onMouseMove);
+    mountNode.addEventListener('mouseup', onMouseUp);
+    mountNode.addEventListener('wheel', onWheel, { passive: false });
 
     // Main animation loop - SIMPLIFIED AND RELIABLE
     const animate = (currentTime) => {
       const deltaTime = currentTime * 0.001;
 
       // Camera positioning
-      if (cameraMode === 'auto') {
+      if (cameraModeRef.current === 'auto') {
         const time = deltaTime * 0.3;
-        const distance = cameraState.distance;
+        const distance = cameraDistanceRef.current;
         camera.position.x = Math.cos(time) * distance;
         camera.position.z = Math.sin(time) * distance;
         camera.position.y = distance * 0.4;
@@ -382,12 +463,12 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
       }
 
       // FIXED TRAINING ANIMATION - RELIABLE AND CONSISTENT
-      if (isTraining && !isTrainingComplete) {
+      if (isTrainingRef.current && !isTrainingCompleteRef.current) {
         const neurons = neuronsRef.current;
         const connections = connectionsRef.current;
 
         // Continuous animation progress
-        animationProgressRef.current = (deltaTime * animationSpeed * 0.5) % (layers.length * 2 + 2);
+        animationProgressRef.current = (deltaTime * animationSpeedRef.current * 0.5) % (layersLengthRef.current * 2 + 2);
         const progress = animationProgressRef.current;
 
         // Reset all visuals
@@ -405,8 +486,8 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
         });
 
         // FORWARD PASS (Green) - First half of cycle
-        if (progress < layers.length) {
-          for (let i = 0; i < layers.length; i++) {
+        if (progress < layersLengthRef.current) {
+          for (let i = 0; i < layersLengthRef.current; i++) {
             const layerStart = i;
             const layerProgress = Math.max(0, Math.min(1, progress - layerStart));
 
@@ -431,10 +512,10 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
           }
         }
         // BACKWARD PASS (Red) - Second half of cycle
-        else if (progress < layers.length * 2) {
-          const backProgress = progress - layers.length;
-          for (let i = layers.length - 1; i >= 0; i--) {
-            const reverseIdx = layers.length - 1 - i;
+        else if (progress < layersLengthRef.current * 2) {
+          const backProgress = progress - layersLengthRef.current;
+          for (let i = layersLengthRef.current - 1; i >= 0; i--) {
+            const reverseIdx = layersLengthRef.current - 1 - i;
             const layerProgress = Math.max(0, Math.min(1, backProgress - reverseIdx));
 
             if (layerProgress > 0) {
@@ -459,7 +540,7 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
         }
         // WEIGHT UPDATE (Blue) - Brief flash
         else {
-          const updateIntensity = Math.sin((progress - layers.length * 2) * Math.PI * 4) * 0.5 + 0.5;
+          const updateIntensity = Math.sin((progress - layersLengthRef.current * 2) * Math.PI * 4) * 0.5 + 0.5;
           neurons.forEach(layer => {
             layer.forEach(neuron => {
               neuron.material.emissive.setHex(0x0099ff);
@@ -474,12 +555,12 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
       }
 
       // Update optimization ball
-      if (optimizationBallRef.current && isTraining) {
+      if (optimizationBallRef.current && isTrainingRef.current) {
         const ball = optimizationBallRef.current;
         const time = deltaTime * 2;
-        ball.position.x = Math.cos(time) * (3 - loss * 2.5);
-        ball.position.z = Math.sin(time) * (3 - loss * 2.5);
-        ball.position.y = -6 + loss * 2;
+        ball.position.x = Math.cos(time) * (3 - lossRef.current * 2.5);
+        ball.position.z = Math.sin(time) * (3 - lossRef.current * 2.5);
+        ball.position.y = -6 + lossRef.current * 2;
       }
 
       renderer.render(scene, camera);
@@ -490,10 +571,10 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
 
     // Handle resize
     const handleResize = () => {
-      if (!mountRef.current) return;
-      camera.aspect = mountRef.current.clientWidth / mountRef.current.clientHeight;
+      if (!mountNode) return;
+      camera.aspect = mountNode.clientWidth / mountNode.clientHeight;
       camera.updateProjectionMatrix();
-      renderer.setSize(mountRef.current.clientWidth, mountRef.current.clientHeight);
+      renderer.setSize(mountNode.clientWidth, mountNode.clientHeight);
     };
 
     window.addEventListener('resize', handleResize);
@@ -502,12 +583,12 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
       }
-      if (mountRef.current && renderer.domElement) {
-        mountRef.current.removeChild(renderer.domElement);
-        mountRef.current.removeEventListener('mousedown', onMouseDown);
-        mountRef.current.removeEventListener('mousemove', onMouseMove);
-        mountRef.current.removeEventListener('mouseup', onMouseUp);
-        mountRef.current.removeEventListener('wheel', onWheel);
+      if (mountNode && renderer.domElement) {
+        mountNode.removeChild(renderer.domElement);
+        mountNode.removeEventListener('mousedown', onMouseDown);
+        mountNode.removeEventListener('mousemove', onMouseMove);
+        mountNode.removeEventListener('mouseup', onMouseUp);
+        mountNode.removeEventListener('wheel', onWheel);
       }
       window.removeEventListener('resize', handleResize);
 
@@ -525,19 +606,19 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
 
       renderer.dispose();
     };
-  }, [layers, createNetwork, cameraMode, animationSpeed, isTraining, isTrainingComplete, activePanel]);
+  }, []);
 
   // Recreate network when architecture changes
   useEffect(() => {
     if (sceneRef.current) {
-      createNetwork();
+      createNetworkRef.current?.();
     }
   }, [createNetwork]);
 
   // Create loss landscape when optimization panel is active
   useEffect(() => {
-    createLossLandscape();
-  }, [createLossLandscape]);
+    createLossLandscape(activePanel === 'optimization');
+  }, [createLossLandscape, activePanel]);
 
   // Training simulation - STOPS AT 90%
   useEffect(() => {
@@ -609,6 +690,20 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
     ));
   };
 
+
+  const applyModelPreset = useCallback((modelName) => {
+    const preset = MODEL_PRESETS[modelName] || MODEL_PRESETS.Custom;
+    setArchitecture(preset.map((layer) => ({ ...layer })));
+    setSelectedModel(modelName);
+    setIsTraining(false);
+    setIsTrainingComplete(false);
+    setEpoch(0);
+    setBatch(0);
+    setLoss(1.0);
+    setAccuracy(0.1);
+    setStatusMessage(`${modelName} architecture loaded.`);
+  }, []);
+
   const startTraining = () => {
     setIsTraining(true);
     setIsTrainingComplete(false);
@@ -634,7 +729,7 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
   };
 
   const togglePanel = (panelName) => {
-    setActivePanel(activePanel === panelName ? null : panelName);
+    setActivePanel((prev) => (prev === panelName ? null : panelName));
   };
 
   const buildSession = useCallback(() => ({
@@ -731,7 +826,7 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
 
   return (
     <div className="w-full h-screen bg-gray-900 relative overflow-hidden">
-      <div ref={mountRef} className="w-full h-full" />
+      <div ref={mountRef} data-testid="three-canvas-mount" className="w-full h-full" />
 
       {/* Header */}
       <div className="absolute top-4 left-4 bg-black bg-opacity-90 text-white p-3 rounded-lg backdrop-blur-sm">
@@ -847,12 +942,15 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
             </label>
             <select
               value={selectedModel}
-              onChange={(e) => setSelectedModel(e.target.value)}
+              onChange={(e) => applyModelPreset(e.target.value)}
               className="bg-gray-700 text-white px-2 py-1 rounded text-xs"
             >
               <option value="Custom">Custom</option>
               <option value="CNN">CNN</option>
               <option value="Transformer">Transformer</option>
+              <option value="Neural Operator">Neural Operator</option>
+              <option value="MoE">MoE</option>
+              <option value="Autoencoder">Autoencoder</option>
               <option value="MLP">MLP</option>
             </select>
           </div>
@@ -893,7 +991,7 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
           </div>
           <div>
             <div className="text-xs text-gray-400">Batch</div>
-            <div className="text-lg font-bold text-blue-400">{batch}</div>
+            <div aria-label="Batch value" className="text-lg font-bold text-blue-400">{batch}</div>
           </div>
           <div>
             <div className="text-xs text-gray-400">Loss</div>
@@ -912,7 +1010,10 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
 
       {/* Active Panel */}
       {activePanel && (
-        <div className="absolute top-24 right-4 bg-black bg-opacity-95 text-white rounded-lg backdrop-blur-sm max-w-sm max-h-96 overflow-y-auto">
+        <div
+          data-testid="config-panel"
+          className="absolute top-24 right-4 bg-black bg-opacity-95 text-white rounded-lg backdrop-blur-sm max-w-sm max-h-96 overflow-y-auto"
+        >
           {activePanel === 'architecture' && (
             <div className="p-4">
               <h3 className="text-sm font-bold mb-3 text-purple-400">Network Architecture</h3>
@@ -1038,4 +1139,3 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
 };
 
 export default NeuralNetwork3D;
-

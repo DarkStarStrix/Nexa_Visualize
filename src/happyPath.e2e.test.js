@@ -19,7 +19,7 @@ test('happy path: open app -> configure -> start training -> observe metric upda
   await userEvent.click(screen.getByRole('button', { name: /start training/i }));
   expect(screen.getByText('TRAINING')).toBeInTheDocument();
 
-  const batchValue = screen.getByText(/^Batch$/).nextElementSibling;
+  const batchValue = screen.getByLabelText('Batch value');
   const beforeBatch = batchValue.textContent;
 
   await act(async () => {

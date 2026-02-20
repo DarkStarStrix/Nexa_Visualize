@@ -45,6 +45,7 @@ class PerspectiveCamera extends MockObject3D {
 class WebGLRenderer {
   constructor() {
     this.domElement = document.createElement('canvas');
+    this.domElement.setAttribute('data-testid', 'three-renderer-canvas');
     this.setSize = jest.fn();
     this.setPixelRatio = jest.fn();
     this.render = jest.fn();
