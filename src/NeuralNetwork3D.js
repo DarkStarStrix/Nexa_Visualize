@@ -1,4 +1,11 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
+import {
+  useTrainingState,
+  initialArchitecture,
+  initialTrainingParams,
+  architectureReducer,
+  trainingParamsReducer
+} from './state';
 import * as THREE from 'three';
 
 const NeuralNetwork3D = () => {
@@ -13,33 +20,24 @@ const NeuralNetwork3D = () => {
   const optimizationBallRef = useRef(null);
   const optimizationHistoryRef = useRef([]);
 
-  const [isTraining, setIsTraining] = useState(false);
+  const {
+    state: trainingState,
+    dispatch: dispatchTraining,
+    startTraining,
+    stopTraining,
+    resetTraining
+  } = useTrainingState();
+  const { isTraining, epoch, batch, loss, accuracy, isTrainingComplete } = trainingState;
   const [currentPhase, setCurrentPhase] = useState('idle');
-  const [epoch, setEpoch] = useState(0);
-  const [batch, setBatch] = useState(0);
-  const [loss, setLoss] = useState(1.0);
-  const [accuracy, setAccuracy] = useState(0.1);
-  const [isTrainingComplete, setIsTrainingComplete] = useState(false);
   const [activePanel, setActivePanel] = useState(null);
   const [cameraMode, setCameraMode] = useState('auto');
   const [animationSpeed, setAnimationSpeed] = useState(1.0);
 
   // Architecture customization
-  const [architecture, setArchitecture] = useState([
-    { neurons: 4, activation: 'Linear', name: 'Input' },
-    { neurons: 8, activation: 'ReLU', name: 'Hidden 1' },
-    { neurons: 6, activation: 'ReLU', name: 'Hidden 2' },
-    { neurons: 3, activation: 'Softmax', name: 'Output' }
-  ]);
+  const [architecture, setArchitecture] = useState(initialArchitecture);
 
   // Training parameters
-  const [trainingParams, setTrainingParams] = useState({
-    learningRate: 0.01,
-    batchSize: 32,
-    epochs: 100,
-    optimizer: 'Adam',
-    lossFunction: 'CrossEntropy'
-  });
+  const [trainingParams, setTrainingParams] = useState(initialTrainingParams);
 
   // Manual camera state
   const [cameraState, setCameraState] = useState({
@@ -548,92 +546,75 @@ const NeuralNetwork3D = () => {
     if (!isTraining || isTrainingComplete) return;
 
     const interval = setInterval(() => {
-      setBatch(prev => prev + 1);
+      const nextBatch = batch + 1;
+      const decay = 1 - trainingParams.learningRate * 20;
+      const lossNoise = (Math.random() - 0.5) * 0.01;
+      const nextLoss = Math.max(0.001, loss * decay + lossNoise);
 
-      setLoss(prev => {
-        const decay = 1 - trainingParams.learningRate * 20;
-        const noise = (Math.random() - 0.5) * 0.01;
-        return Math.max(0.001, prev * decay + noise);
-      });
+      const improvement = (0.9 - accuracy) * trainingParams.learningRate * 15;
+      const accuracyNoise = (Math.random() - 0.5) * 0.005;
+      const nextAccuracy = Math.min(0.92, accuracy + improvement + accuracyNoise);
+      const nextEpoch = nextBatch % 10 === 0 ? epoch + 1 : epoch;
 
-      setAccuracy(prev => {
-        const improvement = (0.9 - prev) * trainingParams.learningRate * 15;
-        const noise = (Math.random() - 0.5) * 0.005;
-        const newAcc = Math.min(0.92, prev + improvement + noise);
-
-        // STOP AT 90% and flash blue
-        if (newAcc >= 0.9 && !isTrainingComplete) {
-          setIsTrainingComplete(true);
-          setIsTraining(false);
-
-          // Blue completion flash
-          setTimeout(() => {
-            neuronsRef.current.forEach(layer => {
-              layer.forEach(neuron => {
-                neuron.material.emissive.setHex(0x0099ff);
-                neuron.material.emissive.multiplyScalar(1);
-              });
-            });
-            connectionsRef.current.forEach(conn => {
-              conn.material.color.setHex(0x0099ff);
-              conn.material.opacity = 0.8;
-            });
-          }, 100);
+      dispatchTraining({
+        type: 'TICK',
+        payload: {
+          epoch: nextEpoch,
+          batch: nextBatch,
+          loss: nextLoss,
+          accuracy: nextAccuracy
         }
-
-        return newAcc;
       });
 
-      if (batch % 10 === 0) {
-        setEpoch(prev => prev + 1);
+      // STOP AT 90% and flash blue
+      if (nextAccuracy >= 0.9 && !isTrainingComplete) {
+        dispatchTraining({ type: 'COMPLETE' });
+
+        // Blue completion flash
+        setTimeout(() => {
+          neuronsRef.current.forEach(layer => {
+            layer.forEach(neuron => {
+              neuron.material.emissive.setHex(0x0099ff);
+              neuron.material.emissive.multiplyScalar(1);
+            });
+          });
+          connectionsRef.current.forEach(conn => {
+            conn.material.color.setHex(0x0099ff);
+            conn.material.opacity = 0.8;
+          });
+        }, 100);
       }
     }, 200 / animationSpeed);
 
     return () => clearInterval(interval);
-  }, [isTraining, isTrainingComplete, trainingParams, batch, animationSpeed]);
+  }, [isTraining, isTrainingComplete, trainingParams, batch, epoch, loss, accuracy, animationSpeed, dispatchTraining]);
 
   // UI Helper functions
   const addLayer = () => {
-    setArchitecture(prev => [
-      ...prev.slice(0, -1),
-      { neurons: 8, activation: 'ReLU', name: `Hidden ${prev.length - 1}` },
-      prev[prev.length - 1]
-    ]);
+    setArchitecture(prev => architectureReducer(prev, { type: 'ADD_LAYER' }));
   };
 
   const removeLayer = (index) => {
     if (architecture.length > 3 && index > 0 && index < architecture.length - 1) {
-      setArchitecture(prev => prev.filter((_, i) => i !== index));
+      setArchitecture(prev => architectureReducer(prev, { type: 'REMOVE_LAYER', payload: { index } }));
     }
   };
 
   const updateLayer = (index, field, value) => {
-    setArchitecture(prev => prev.map((layer, i) =>
-      i === index ? { ...layer, [field]: value } : layer
-    ));
+    setArchitecture(prev => architectureReducer(prev, { type: 'UPDATE_LAYER', payload: { index, field, value } }));
   };
 
-  const startTraining = () => {
-    setIsTraining(true);
-    setIsTrainingComplete(false);
-    setEpoch(0);
-    setBatch(0);
-    setLoss(1.0);
-    setAccuracy(0.1);
+  const handleStartTraining = () => {
+    startTraining();
     animationProgressRef.current = 0;
   };
 
-  const stopTraining = () => {
-    setIsTraining(false);
+  const handleStopTraining = () => {
+    stopTraining();
   };
 
   const resetNetwork = () => {
-    setIsTraining(false);
-    setIsTrainingComplete(false);
-    setEpoch(0);
-    setBatch(0);
-    setLoss(1.0);
-    setAccuracy(0.1);
+    resetTraining();
     animationProgressRef.current = 0;
   };
 
@@ -643,7 +624,7 @@ const NeuralNetwork3D = () => {
 
   return (
     <div className="w-full h-screen bg-gray-900 relative overflow-hidden">
-      <div ref={mountRef} className="w-full h-full" />
+      <div ref={mountRef} className="w-full h-full" data-testid="three-canvas-mount" />
 
       {/* Header */}
       <div className="absolute top-4 left-4 bg-black bg-opacity-90 text-white p-3 rounded-lg backdrop-blur-sm">
@@ -729,7 +710,7 @@ const NeuralNetwork3D = () => {
           <div className="flex gap-2">
             {!isTraining ? (
               <button
-                onClick={startTraining}
+                onClick={handleStartTraining}
                 className="bg-green-600 hover:bg-green-700 text-white px-4 py-1 rounded text-xs font-medium"
                 disabled={isTrainingComplete}
               >
@@ -737,7 +718,7 @@ const NeuralNetwork3D = () => {
               </button>
             ) : (
               <button
-                onClick={stopTraining}
+                onClick={handleStopTraining}
                 className="bg-red-600 hover:bg-red-700 text-white px-4 py-1 rounded text-xs font-medium"
               >
                 Stop
@@ -781,7 +762,7 @@ const NeuralNetwork3D = () => {
 
       {/* Active Panel */}
       {activePanel && (
-        <div className="absolute top-24 right-4 bg-black bg-opacity-95 text-white rounded-lg backdrop-blur-sm max-w-sm max-h-96 overflow-y-auto">
+        <div data-testid="config-panel" className="absolute top-24 right-4 bg-black bg-opacity-95 text-white rounded-lg backdrop-blur-sm max-w-sm max-h-96 overflow-y-auto">
           {activePanel === 'architecture' && (
             <div className="p-4">
               <h3 className="text-sm font-bold mb-3 text-purple-400">Network Architecture</h3>
@@ -851,7 +832,7 @@ const NeuralNetwork3D = () => {
                     min="0.001"
                     max="1"
                     value={trainingParams.learningRate}
-                    onChange={(e) => setTrainingParams(prev => ({ ...prev, learningRate: parseFloat(e.target.value) || 0.01 }))}
+                    onChange={(e) => setTrainingParams(prev => trainingParamsReducer(prev, { type: 'UPDATE_PARAM', payload: { field: 'learningRate', value: parseFloat(e.target.value) || 0.01 } }))}
                     className="w-full bg-gray-700 text-white text-xs p-2 rounded"
                   />
                 </div>
@@ -859,7 +840,7 @@ const NeuralNetwork3D = () => {
                   <label className="block text-xs mb-1">Batch Size:</label>
                   <select
                     value={trainingParams.batchSize}
-                    onChange={(e) => setTrainingParams(prev => ({ ...prev, batchSize: parseInt(e.target.value) }))}
+                    onChange={(e) => setTrainingParams(prev => trainingParamsReducer(prev, { type: 'UPDATE_PARAM', payload: { field: 'batchSize', value: parseInt(e.target.value) } }))}
                     className="w-full bg-gray-700 text-white text-xs p-2 rounded"
                   >
                     <option value={16}>16</option>
@@ -872,7 +853,7 @@ const NeuralNetwork3D = () => {
                   <label className="block text-xs mb-1">Optimizer:</label>
                   <select
                     value={trainingParams.optimizer}
-                    onChange={(e) => setTrainingParams(prev => ({ ...prev, optimizer: e.target.value }))}
+                    onChange={(e) => setTrainingParams(prev => trainingParamsReducer(prev, { type: 'UPDATE_PARAM', payload: { field: 'optimizer', value: e.target.value } }))}
                     className="w-full bg-gray-700 text-white text-xs p-2 rounded"
                   >
                     <option value="Adam">Adam</option>
