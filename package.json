@@ -17,9 +17,8 @@
     "start": "react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test",
-    "eject": "react-scripts eject",
-    "test:ci": "react-scripts test --watch=false --runInBand",
-    "test:e2e": "react-scripts test --watch=false --runInBand --testPathPattern=happyPath.e2e.test.js"
+    "lint": "eslint \"src/**/*.{js,jsx,ts,tsx}\"",
+    "eject": "react-scripts eject"
   },
   "eslintConfig": {
     "extends": [

@@ -1,112 +1,113 @@
 # Nexa Visualize
 
-Nexa Visualize is an interactive,
-educational tool for visualizing the architecture and training process of a neural network in real-time 3D.
-Built with pure JavaScript and Three.js,
-it provides an intuitive way to understand complex concepts like forward propagation,
-backpropagation, and the impact of hyperparameter tuning.
+[![CI](https://github.com/OWNER/Nexa_Visualize/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/Nexa_Visualize/actions/workflows/ci.yml)
+[![Deploy to GitHub Pages](https://github.com/OWNER/Nexa_Visualize/actions/workflows/deploy-pages.yml/badge.svg)](https://github.com/OWNER/Nexa_Visualize/actions/workflows/deploy-pages.yml)
+[![Live Site](https://img.shields.io/badge/Live%20Site-GitHub%20Pages-blue?logo=github)](https://OWNER.github.io/Nexa_Visualize/)
+
+Nexa Visualize is an interactive, educational tool for visualizing the architecture and training process of a neural network in real-time 3D. Built with React and Three.js, it provides an intuitive way to understand concepts like forward propagation, backpropagation, and hyperparameter tuning.
+
+## Hosting Choice
+
+This repository is configured for **static hosting on GitHub Pages**.
+
+- CI workflow: `.github/workflows/ci.yml`
+- Deployment workflow: `.github/workflows/deploy-pages.yml`
+- Live URL format: `https://<github-username>.github.io/Nexa_Visualize/`
+
+> Replace `OWNER` in the badge links above with your GitHub username or organization.
+
+## Environment Configuration
+
+This app is static and does not require runtime secrets for normal operation.
+
+Create a `.env` file at the project root only if you need custom React environment variables:
+
+```bash
+# .env.example
+REACT_APP_API_BASE_URL=https://api.example.com
+REACT_APP_ENABLE_EXPERIMENTAL_MODE=false
+```
+
+Rules for frontend environment variables:
+
+- Only variables prefixed with `REACT_APP_` are exposed to the browser.
+- Do **not** put private credentials in frontend environment variables.
+- Build-time variables are injected during `npm run build`.
+
+## Required Repository Settings / Secrets
+
+For GitHub Pages deployment in this repo, no additional custom secrets are required.
+
+Required repository settings:
+
+1. Go to **Settings → Pages**.
+2. Under **Build and deployment**, select **Source: GitHub Actions**.
+3. Ensure the default branch is `main` (or `master`, both are supported in workflows).
+
+GitHub-provided token usage:
+
+- `GITHUB_TOKEN` (automatically provided by GitHub Actions) is used by `actions/deploy-pages`.
+
+## CI/CD Workflows
+
+### Continuous Integration (`ci.yml`)
+
+Runs on push and pull requests:
+
+1. `npm ci`
+2. `npm run lint`
+3. `CI=true npm test -- --watch=false`
+4. `npm run build`
+
+### Deployment (`deploy-pages.yml`)
+
+Runs on pushes to `main`/`master` and manual dispatch:
+
+1. `npm ci`
+2. Build with `PUBLIC_URL=/${{ github.event.repository.name }}`
+3. Upload build output from `build/`
+4. Deploy to GitHub Pages with `actions/deploy-pages`
 
 ## Features
 
--   **Interactive 3D Visualization:** View neural network architectures in a dynamic 3D space.
--   **Multiple Model Architectures:** Visualize and interact with a variety of popular models:
-    -   Feedforward Neural Networks (FNNs)
-    -   Convolutional Neural Networks (CNNs) with variants like LeNet, AlexNet, and ResNet.
-    -   Transformers (Encoder-only, Decoder-only, and Encoder-Decoder).
-    -   Mixture of Experts (MoE).
-    -   Autoencoders / VAEs.
--   **Dynamic Architecture:** Add or remove hidden layers and change the number of neurons in real-time to see how the structure changes.
--   **Real-time Training Animation:** Observe the training process with clear, distinct animations:
-    -   **Forward Pass:** A green wave of light flows from the input to the output layer.
-    -   **Backward Pass:** A red wave flows in reverse, simulating gradient calculation.
-    -   **Weight Update:** A blue "pop" effect on neurons signifies that the weights have been updated.
--   **Customizable Hyperparameters:** Adjust parameters like epochs, learning rate, optimizer, and loss function to see their immediate impact on training.
--   **Live Performance Monitoring:** Track training progress with a real-time graph that plots training loss (red) and accuracy (green).
--   **Interactive Camera:** Freely explore the 3D scene with an autorotation mode or manual drag-to-rotate and scroll-to-zoom controls.
--   **Clean, Non-Distracting UI:** A simple, expandable control panel keeps the focus on the visualization, showing customization options only when you need them.
+- **Interactive 3D Visualization** of neural network architectures.
+- **Multiple Model Architectures** including FNNs, CNN variants, Transformers, MoE, and Autoencoders/VAEs.
+- **Dynamic Architecture Editing** for layers and neuron counts.
+- **Real-time Training Animation** for forward pass, backward pass, and weight updates.
+- **Hyperparameter Controls** for epochs, learning rate, optimizer, and loss.
+- **Live Monitoring Graph** for loss and accuracy.
+- **Camera Controls** for auto-rotate and manual navigation.
 
-## Controls
+## Local Development
 
-### Main Controls
--   **Start Training / Stop:** Begins or halts the training simulation.
--   **Reset:** Resets the training progress and network state to its initial configuration.
--   **Auto / Manual:** Toggles between automatic camera rotation and manual user control.
--   **Speed Slider:** Adjust the speed of the training animation.
+Install and run locally:
 
-### Customization Panels
-Click a category button to expand its details. Click it again to collapse.
--   **Architecture:** Add or remove hidden layers and set the number of neurons for each layer.
--   **Parameters:** Adjust training hyperparameters like Epochs, Learning Rate, Optimizer, and Loss Function.
--   **Monitoring:** View the live graph of training loss and accuracy, along with key parameter info.
+```bash
+npm ci
+npm start
+```
 
-## How to Run
+Build for production:
 
-To view this project, you need to run it from a local web server. You cannot simply open `public/index.html` as a file in your browser due to security policies (CORS).
+```bash
+npm run build
+```
 
-Here are a few easy ways to start a local server:
+Run tests:
 
-### Option 1: Using Docker (Recommended)
+```bash
+CI=true npm test -- --watch=false
+```
 
-You can build and run this project in a Docker container for easy deployment on any OS.
+Run lint:
 
-1. **Build the Docker image** (from the project root):
-    ```sh
-    docker build -t nexa-visualize .
-    ```
-2. **Run the container**:
-    ```sh
-    docker run -p 3000:3000 nexa-visualize
-    ```
-3. Open your browser and go to: **http://localhost:3000**
-
----
-
-### Option 2: Using Python
-
-If you have Python installed, it comes with a simple built-in web server.
-
-1.  Open a terminal or command prompt.
-2.  Navigate to the `public` directory of this project:
-    ```sh
-    cd path/to/nexa-visualize/public
-    ```
-3.  Start the server.
-    *   For **Python 3**: `python -m http.server`
-    *   For **Python 2**: `python -m SimpleHTTPServer`
-
-4.  Open your web browser and go to: **http://localhost:8000**
-
-### Option 3: Using Node.js (`serve` package)
-
-If you have Node.js and npm, you can use the `serve` package.
-
-1.  Install `serve` globally (you only need to do this once):
-    ```sh
-    npm install -g serve
-    ```
-2.  In your terminal, navigate to the `public` directory:
-    ```sh
-    cd path/to/nexa-visualize/public
-    ```
-3.  Start the server:
-    ```sh
-    serve
-    ```
-4.  The terminal will give you a URL, usually `http://localhost:3000`. Open it in your browser.
-
-### Option 4: Using VS Code Live Server Extension
-
-If you use Visual Studio Code as your editor:
-
-1.  Install the **Live Server** extension from the VS Code Marketplace.
-2.  Open the `nexa-visualize` project folder in VS Code.
-3.  In the file explorer, right-click on `public/index.html`.
-4.  Select "Open with Live Server".
-5.  Your browser will automatically open with the correct page.
+```bash
+npm run lint
+```
 
 ## Technology Stack
 
--   **HTML5**
--   **CSS3**
--   **JavaScript (ES6+)**
--   **Three.js** for 3D rendering
+- React
+- Three.js
+- JavaScript (ES6+)
+- CSS3

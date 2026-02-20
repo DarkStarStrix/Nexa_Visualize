@@ -1,14 +1,19 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
-import {
-  useTrainingState,
-  initialArchitecture,
-  initialTrainingParams,
-  architectureReducer,
-  trainingParamsReducer
-} from './state';
 import * as THREE from 'three';
+import {
+  DEFAULT_ARCHITECTURE,
+  DEFAULT_CAMERA_STATE,
+  DEFAULT_SESSION_STATE,
+  DEFAULT_TRAINING_PARAMS,
+  generateSessionId,
+  parseSessionPayload,
+  serializeSession
+} from './domain/sessionSchema';
 
-const NeuralNetwork3D = () => {
+const LOCAL_DRAFT_KEY = 'nexa.visualize.session.draft';
+const SHARED_PREFIX = 'nexa.visualize.session.shared.';
+
+const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
   const mountRef = useRef(null);
   const sceneRef = useRef(null);
   const rendererRef = useRef(null);
@@ -20,34 +25,27 @@ const NeuralNetwork3D = () => {
   const optimizationBallRef = useRef(null);
   const optimizationHistoryRef = useRef([]);
 
-  const {
-    state: trainingState,
-    dispatch: dispatchTraining,
-    startTraining,
-    stopTraining,
-    resetTraining
-  } = useTrainingState();
-  const { isTraining, epoch, batch, loss, accuracy, isTrainingComplete } = trainingState;
+  const [isTraining, setIsTraining] = useState(false);
   const [currentPhase, setCurrentPhase] = useState('idle');
-  const [activePanel, setActivePanel] = useState(null);
-  const [cameraMode, setCameraMode] = useState('auto');
-  const [animationSpeed, setAnimationSpeed] = useState(1.0);
+  const [epoch, setEpoch] = useState(0);
+  const [batch, setBatch] = useState(0);
+  const [loss, setLoss] = useState(1.0);
+  const [accuracy, setAccuracy] = useState(0.1);
+  const [isTrainingComplete, setIsTrainingComplete] = useState(false);
+  const [activePanel, setActivePanel] = useState(DEFAULT_SESSION_STATE.uiState.activePanel);
+  const [cameraMode, setCameraMode] = useState(DEFAULT_SESSION_STATE.cameraMode);
+  const [animationSpeed, setAnimationSpeed] = useState(DEFAULT_SESSION_STATE.uiState.animationSpeed);
+  const [selectedModel, setSelectedModel] = useState(DEFAULT_SESSION_STATE.selectedModel);
+  const [statusMessage, setStatusMessage] = useState('');
 
   // Architecture customization
-  const [architecture, setArchitecture] = useState(initialArchitecture);
+  const [architecture, setArchitecture] = useState(DEFAULT_ARCHITECTURE);
 
   // Training parameters
-  const [trainingParams, setTrainingParams] = useState(initialTrainingParams);
+  const [trainingParams, setTrainingParams] = useState(DEFAULT_TRAINING_PARAMS);
 
   // Manual camera state
-  const [cameraState, setCameraState] = useState({
-    distance: 15,
-    angleX: 0,
-    angleY: 0.3,
-    targetDistance: 15,
-    targetAngleX: 0,
-    targetAngleY: 0.3
-  });
+  const [cameraState, setCameraState] = useState(DEFAULT_CAMERA_STATE);
 
   // Generate optimized layer configuration
   const layers = useMemo(() => {
@@ -500,7 +498,7 @@ const NeuralNetwork3D = () => {
 
     window.addEventListener('resize', handleResize);
 
-    return () => {
+  return () => {
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
       }
@@ -546,75 +544,92 @@ const NeuralNetwork3D = () => {
     if (!isTraining || isTrainingComplete) return;
 
     const interval = setInterval(() => {
-      const nextBatch = batch + 1;
-      const decay = 1 - trainingParams.learningRate * 20;
-      const lossNoise = (Math.random() - 0.5) * 0.01;
-      const nextLoss = Math.max(0.001, loss * decay + lossNoise);
+      setBatch(prev => prev + 1);
 
-      const improvement = (0.9 - accuracy) * trainingParams.learningRate * 15;
-      const accuracyNoise = (Math.random() - 0.5) * 0.005;
-      const nextAccuracy = Math.min(0.92, accuracy + improvement + accuracyNoise);
-      const nextEpoch = nextBatch % 10 === 0 ? epoch + 1 : epoch;
-
-      dispatchTraining({
-        type: 'TICK',
-        payload: {
-          epoch: nextEpoch,
-          batch: nextBatch,
-          loss: nextLoss,
-          accuracy: nextAccuracy
-        }
+      setLoss(prev => {
+        const decay = 1 - trainingParams.learningRate * 20;
+        const noise = (Math.random() - 0.5) * 0.01;
+        return Math.max(0.001, prev * decay + noise);
       });
 
-      // STOP AT 90% and flash blue
-      if (nextAccuracy >= 0.9 && !isTrainingComplete) {
-        dispatchTraining({ type: 'COMPLETE' });
+      setAccuracy(prev => {
+        const improvement = (0.9 - prev) * trainingParams.learningRate * 15;
+        const noise = (Math.random() - 0.5) * 0.005;
+        const newAcc = Math.min(0.92, prev + improvement + noise);
 
-        // Blue completion flash
-        setTimeout(() => {
-          neuronsRef.current.forEach(layer => {
-            layer.forEach(neuron => {
-              neuron.material.emissive.setHex(0x0099ff);
-              neuron.material.emissive.multiplyScalar(1);
+        // STOP AT 90% and flash blue
+        if (newAcc >= 0.9 && !isTrainingComplete) {
+          setIsTrainingComplete(true);
+          setIsTraining(false);
+
+          // Blue completion flash
+          setTimeout(() => {
+            neuronsRef.current.forEach(layer => {
+              layer.forEach(neuron => {
+                neuron.material.emissive.setHex(0x0099ff);
+                neuron.material.emissive.multiplyScalar(1);
+              });
             });
-          });
-          connectionsRef.current.forEach(conn => {
-            conn.material.color.setHex(0x0099ff);
-            conn.material.opacity = 0.8;
-          });
-        }, 100);
+            connectionsRef.current.forEach(conn => {
+              conn.material.color.setHex(0x0099ff);
+              conn.material.opacity = 0.8;
+            });
+          }, 100);
+        }
+
+        return newAcc;
+      });
+
+      if (batch % 10 === 0) {
+        setEpoch(prev => prev + 1);
       }
     }, 200 / animationSpeed);
 
-    return () => clearInterval(interval);
-  }, [isTraining, isTrainingComplete, trainingParams, batch, epoch, loss, accuracy, animationSpeed, dispatchTraining]);
+  return () => clearInterval(interval);
+  }, [isTraining, isTrainingComplete, trainingParams, batch, animationSpeed]);
 
   // UI Helper functions
   const addLayer = () => {
-    setArchitecture(prev => architectureReducer(prev, { type: 'ADD_LAYER' }));
+    setArchitecture(prev => [
+      ...prev.slice(0, -1),
+      { neurons: 8, activation: 'ReLU', name: `Hidden ${prev.length - 1}` },
+      prev[prev.length - 1]
+    ]);
   };
 
   const removeLayer = (index) => {
     if (architecture.length > 3 && index > 0 && index < architecture.length - 1) {
-      setArchitecture(prev => architectureReducer(prev, { type: 'REMOVE_LAYER', payload: { index } }));
+      setArchitecture(prev => prev.filter((_, i) => i !== index));
     }
   };
 
   const updateLayer = (index, field, value) => {
-    setArchitecture(prev => architectureReducer(prev, { type: 'UPDATE_LAYER', payload: { index, field, value } }));
+    setArchitecture(prev => prev.map((layer, i) =>
+      i === index ? { ...layer, [field]: value } : layer
+    ));
   };
 
-  const handleStartTraining = () => {
-    startTraining();
+  const startTraining = () => {
+    setIsTraining(true);
+    setIsTrainingComplete(false);
+    setEpoch(0);
+    setBatch(0);
+    setLoss(1.0);
+    setAccuracy(0.1);
     animationProgressRef.current = 0;
   };
 
-  const handleStopTraining = () => {
-    stopTraining();
+  const stopTraining = () => {
+    setIsTraining(false);
   };
 
   const resetNetwork = () => {
-    resetTraining();
+    setIsTraining(false);
+    setIsTrainingComplete(false);
+    setEpoch(0);
+    setBatch(0);
+    setLoss(1.0);
+    setAccuracy(0.1);
     animationProgressRef.current = 0;
   };
 
@@ -622,9 +637,101 @@ const NeuralNetwork3D = () => {
     setActivePanel(activePanel === panelName ? null : panelName);
   };
 
+  const buildSession = useCallback(() => ({
+    architecture,
+    trainingParams,
+    cameraMode,
+    cameraState,
+    selectedModel,
+    uiState: {
+      activePanel,
+      animationSpeed
+    }
+  }), [architecture, trainingParams, cameraMode, cameraState, selectedModel, activePanel, animationSpeed]);
+
+  const applySession = useCallback((rawSession) => {
+    const { session, error } = parseSessionPayload(rawSession);
+    if (error || !session) {
+      setStatusMessage(error || 'Session payload is invalid.');
+      return false;
+    }
+
+    setArchitecture(session.architecture);
+    setTrainingParams(session.trainingParams);
+    setCameraMode(session.cameraMode);
+    setCameraState(session.cameraState);
+    setSelectedModel(session.selectedModel);
+    setActivePanel(session.uiState.activePanel);
+    setAnimationSpeed(session.uiState.animationSpeed);
+    setStatusMessage('Session loaded.');
+    return true;
+  }, []);
+
+  const saveDraftSession = useCallback(() => {
+    const payload = serializeSession(buildSession());
+    localStorage.setItem(LOCAL_DRAFT_KEY, payload);
+    setStatusMessage('Session saved to local storage.');
+  }, [buildSession]);
+
+  const loadDraftSession = useCallback(() => {
+    const payload = localStorage.getItem(LOCAL_DRAFT_KEY);
+    if (!payload) {
+      setStatusMessage('No saved local session found.');
+      return;
+    }
+
+    applySession(payload);
+  }, [applySession]);
+
+  const exportSession = useCallback(() => {
+    const blob = new Blob([serializeSession(buildSession())], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = 'nexa-visualize-session.json';
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setStatusMessage('Session exported as JSON.');
+  }, [buildSession]);
+
+  const importSession = useCallback((event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (loadEvent) => {
+      applySession(loadEvent.target?.result);
+    };
+    reader.readAsText(file);
+    event.target.value = '';
+  }, [applySession]);
+
+  const createShareLink = useCallback(() => {
+    const newSessionId = generateSessionId();
+    const payload = serializeSession(buildSession());
+    localStorage.setItem(`${SHARED_PREFIX}${newSessionId}`, payload);
+    if (onSessionRouteChange) {
+      onSessionRouteChange(newSessionId);
+    }
+    setStatusMessage(`Share link ready: /session/${newSessionId}`);
+  }, [buildSession, onSessionRouteChange]);
+
+
+  useEffect(() => {
+    if (!sessionId) return;
+
+    const sharedPayload = localStorage.getItem(`${SHARED_PREFIX}${sessionId}`);
+    if (!sharedPayload) {
+      setStatusMessage(`Session ${sessionId} not found in local storage.`);
+      return;
+    }
+
+    applySession(sharedPayload);
+  }, [sessionId, applySession]);
+
   return (
     <div className="w-full h-screen bg-gray-900 relative overflow-hidden">
-      <div ref={mountRef} className="w-full h-full" data-testid="three-canvas-mount" />
+      <div ref={mountRef} className="w-full h-full" />
 
       {/* Header */}
       <div className="absolute top-4 left-4 bg-black bg-opacity-90 text-white p-3 rounded-lg backdrop-blur-sm">
@@ -640,6 +747,8 @@ const NeuralNetwork3D = () => {
         <div className="text-xs text-gray-300">
           {architecture.length} layers • {architecture.reduce((sum, layer) => sum + layer.neurons, 0)} neurons
         </div>
+        <div className="text-xs text-cyan-300 mt-1">Model: {selectedModel}</div>
+        {statusMessage && <div className="text-xs text-yellow-300 mt-1">{statusMessage}</div>}
       </div>
 
       {/* Controls */}
@@ -707,10 +816,51 @@ const NeuralNetwork3D = () => {
             </div>
           </div>
 
+          <div className="grid grid-cols-3 gap-1 mb-2">
+            <button
+              onClick={saveDraftSession}
+              className="bg-blue-700 hover:bg-blue-800 text-white px-2 py-1 rounded text-xs font-medium"
+            >
+              Save Local
+            </button>
+            <button
+              onClick={loadDraftSession}
+              className="bg-blue-700 hover:bg-blue-800 text-white px-2 py-1 rounded text-xs font-medium"
+            >
+              Load Local
+            </button>
+            <button
+              onClick={createShareLink}
+              className="bg-indigo-700 hover:bg-indigo-800 text-white px-2 py-1 rounded text-xs font-medium"
+            >
+              Share Link
+            </button>
+            <button
+              onClick={exportSession}
+              className="bg-gray-600 hover:bg-gray-700 text-white px-2 py-1 rounded text-xs font-medium"
+            >
+              Export JSON
+            </button>
+            <label className="bg-gray-600 hover:bg-gray-700 text-white px-2 py-1 rounded text-xs font-medium text-center cursor-pointer">
+              Import JSON
+              <input type="file" accept="application/json" onChange={importSession} className="hidden" />
+            </label>
+            <select
+              value={selectedModel}
+              onChange={(e) => setSelectedModel(e.target.value)}
+              className="bg-gray-700 text-white px-2 py-1 rounded text-xs"
+            >
+              <option value="Custom">Custom</option>
+              <option value="CNN">CNN</option>
+              <option value="Transformer">Transformer</option>
+              <option value="MLP">MLP</option>
+            </select>
+          </div>
+
           <div className="flex gap-2">
             {!isTraining ? (
               <button
-                onClick={handleStartTraining}
+                onClick={startTraining}
                 className="bg-green-600 hover:bg-green-700 text-white px-4 py-1 rounded text-xs font-medium"
                 disabled={isTrainingComplete}
               >
@@ -718,7 +868,7 @@ const NeuralNetwork3D = () => {
               </button>
             ) : (
               <button
-                onClick={handleStopTraining}
+                onClick={stopTraining}
                 className="bg-red-600 hover:bg-red-700 text-white px-4 py-1 rounded text-xs font-medium"
               >
                 Stop
@@ -762,7 +912,7 @@ const NeuralNetwork3D = () => {
 
       {/* Active Panel */}
       {activePanel && (
-        <div data-testid="config-panel" className="absolute top-24 right-4 bg-black bg-opacity-95 text-white rounded-lg backdrop-blur-sm max-w-sm max-h-96 overflow-y-auto">
+        <div className="absolute top-24 right-4 bg-black bg-opacity-95 text-white rounded-lg backdrop-blur-sm max-w-sm max-h-96 overflow-y-auto">
           {activePanel === 'architecture' && (
             <div className="p-4">
               <h3 className="text-sm font-bold mb-3 text-purple-400">Network Architecture</h3>
@@ -832,7 +982,7 @@ const NeuralNetwork3D = () => {
                     min="0.001"
                     max="1"
                     value={trainingParams.learningRate}
-                    onChange={(e) => setTrainingParams(prev => trainingParamsReducer(prev, { type: 'UPDATE_PARAM', payload: { field: 'learningRate', value: parseFloat(e.target.value) || 0.01 } }))}
+                    onChange={(e) => setTrainingParams(prev => ({ ...prev, learningRate: parseFloat(e.target.value) || 0.01 }))}
                     className="w-full bg-gray-700 text-white text-xs p-2 rounded"
                   />
                 </div>
@@ -840,7 +990,7 @@ const NeuralNetwork3D = () => {
                   <label className="block text-xs mb-1">Batch Size:</label>
                   <select
                     value={trainingParams.batchSize}
-                    onChange={(e) => setTrainingParams(prev => trainingParamsReducer(prev, { type: 'UPDATE_PARAM', payload: { field: 'batchSize', value: parseInt(e.target.value) } }))}
+                    onChange={(e) => setTrainingParams(prev => ({ ...prev, batchSize: parseInt(e.target.value) }))}
                     className="w-full bg-gray-700 text-white text-xs p-2 rounded"
                   >
                     <option value={16}>16</option>
@@ -853,7 +1003,7 @@ const NeuralNetwork3D = () => {
                   <label className="block text-xs mb-1">Optimizer:</label>
                   <select
                     value={trainingParams.optimizer}
-                    onChange={(e) => setTrainingParams(prev => trainingParamsReducer(prev, { type: 'UPDATE_PARAM', payload: { field: 'optimizer', value: e.target.value } }))}
+                    onChange={(e) => setTrainingParams(prev => ({ ...prev, optimizer: e.target.value }))}
                     className="w-full bg-gray-700 text-white text-xs p-2 rounded"
                   >
                     <option value="Adam">Adam</option>
