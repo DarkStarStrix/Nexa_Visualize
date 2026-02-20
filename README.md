@@ -68,7 +68,7 @@ Runs on pushes to `main`/`master` and manual dispatch:
 3. Upload build output from `build/`
 4. Deploy to GitHub Pages with `actions/deploy-pages`
 
-## Features
+## Canonical source decision
 
 - **Interactive 3D Visualization** of neural network architectures.
 - **Multiple Model Architectures** including FNNs, CNN variants, Transformers, MoE, and Autoencoders/VAEs.
