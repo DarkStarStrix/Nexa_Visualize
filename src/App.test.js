@@ -1,11 +1,9 @@
 import { render, screen } from '@testing-library/react';
 import App from './App';
 
-jest.mock('./features/visualizer/VisualizerFeature', () => () => (
-  <div data-testid="visualizer-feature" />
-));
+jest.mock('./NeuralNetwork3D', () => () => <div>Nexa Visualize</div>);
 
-test('renders the visualizer feature entrypoint', () => {
+test('renders the visualization shell', () => {
   render(<App />);
-  expect(screen.getByTestId('visualizer-feature')).toBeInTheDocument();
+  expect(screen.getByText('Nexa Visualize')).toBeInTheDocument();
 });
