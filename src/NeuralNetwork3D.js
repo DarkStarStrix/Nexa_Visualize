@@ -66,12 +66,6 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
   const optimizationBallRef = useRef(null);
   const cameraDistanceRef = useRef(DEFAULT_CAMERA_STATE.distance);
   const lossRef = useRef(1.0);
-  const isTrainingRef = useRef(false);
-  const isTrainingCompleteRef = useRef(false);
-  const cameraModeRef = useRef(DEFAULT_SESSION_STATE.cameraMode);
-  const animationSpeedRef = useRef(DEFAULT_SESSION_STATE.uiState.animationSpeed);
-  const createNetworkRef = useRef(null);
-  const layersLengthRef = useRef(DEFAULT_ARCHITECTURE.length);
 
   const [isTraining, setIsTraining] = useState(false);
   const [epoch, setEpoch] = useState(0);
@@ -101,22 +95,6 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
   useEffect(() => {
     lossRef.current = loss;
   }, [loss]);
-
-  useEffect(() => {
-    isTrainingRef.current = isTraining;
-  }, [isTraining]);
-
-  useEffect(() => {
-    isTrainingCompleteRef.current = isTrainingComplete;
-  }, [isTrainingComplete]);
-
-  useEffect(() => {
-    cameraModeRef.current = cameraMode;
-  }, [cameraMode]);
-
-  useEffect(() => {
-    animationSpeedRef.current = animationSpeed;
-  }, [animationSpeed]);
 
   // Generate optimized layer configuration
   const layers = useMemo(() => {
