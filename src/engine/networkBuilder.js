@@ -3,6 +3,8 @@ import * as THREE from 'three';
 const LAYER_SPACING = 3.5;
 const NEURON_SIZE = 0.15;
 const BASE_MAX_CONNECTIONS = 1800;
+const GRID_PLANE_Y = -8;
+const GRID_CLEARANCE = 0.25;
 
 const LEGACY_CAMERA_DISTANCE = {
   CNN: 50,
@@ -82,8 +84,8 @@ const createLabelSprite = (text, color = '#f8fafc') => {
   }
   if (!context) return null;
 
-  const fontSize = 32;
-  const padding = 16;
+  const fontSize = 18;
+  const padding = 8;
   context.font = `600 ${fontSize}px sans-serif`;
   const width = Math.ceil(context.measureText(text).width + padding * 2);
   const height = fontSize + padding * 2;
@@ -93,7 +95,7 @@ const createLabelSprite = (text, color = '#f8fafc') => {
   context.font = `600 ${fontSize}px sans-serif`;
   context.textAlign = 'center';
   context.textBaseline = 'middle';
-  context.fillStyle = 'rgba(3, 7, 18, 0.72)';
+  context.fillStyle = 'rgba(15, 23, 42, 0.66)';
   context.fillRect(0, 0, width, height);
   context.strokeStyle = 'rgba(255, 255, 255, 0.24)';
   context.lineWidth = 2;
@@ -106,11 +108,12 @@ const createLabelSprite = (text, color = '#f8fafc') => {
   const material = new THREE.SpriteMaterial({
     map: texture,
     transparent: true,
-    depthWrite: false
+    depthWrite: false,
+    depthTest: false
   });
   const sprite = new THREE.Sprite(material);
   const aspect = width / Math.max(1, height);
-  sprite.scale.set(3.2 * aspect, 3.2, 1);
+  sprite.scale.set(1.2 * aspect, 0.95, 1);
   sprite.userData = {
     isLabel: true
   };
@@ -125,6 +128,11 @@ const getGeometryHeight = (geometry) => {
   if (Number.isFinite(params.radiusTop)) return Math.max(params.radiusTop, params.radiusBottom || 0) * 2;
   if (Number.isFinite(params.depth)) return params.depth;
   return 1.2;
+};
+
+const resolveCenterYAboveGrid = (centerY, geometryHeight) => {
+  const minCenterY = GRID_PLANE_Y + geometryHeight / 2 + GRID_CLEARANCE;
+  return Math.max(centerY, minCenterY);
 };
 
 export const calculateOptimalCameraDistance = (layers, selectedModel = 'Custom') => {
@@ -274,7 +282,9 @@ const createLegacyContext = ({ scene, connectionBudget }) => {
       });
       const geometry = spec.geometry();
       const mesh = new THREE.Mesh(geometry, material);
-      mesh.position.set(spec.x, spec.y, spec.z);
+      const geometryHeight = getGeometryHeight(geometry);
+      const centerY = resolveCenterYAboveGrid(spec.y, geometryHeight);
+      mesh.position.set(spec.x, centerY, spec.z);
       mesh.userData = {
         originalColor: spec.color,
         activation: 0,
@@ -287,7 +297,7 @@ const createLegacyContext = ({ scene, connectionBudget }) => {
       if (spec.name) {
         const label = createLabelSprite(spec.name, spec.labelColor || '#f8fafc');
         if (label) {
-          label.position.set(spec.x, spec.y + getGeometryHeight(geometry) * 0.6 + 1.15, spec.z);
+          label.position.set(spec.x, centerY + geometryHeight / 2 + 0.28, spec.z);
           scene.add(label);
           decorations.push(label);
         }
@@ -737,7 +747,8 @@ const buildDenseFallbackNetwork = ({ scene, layers, random, selectedModel, conne
         layerCount: layers.length,
         neuronIndex
       });
-      neuron.position.set(layerX, offsets.y, offsets.z);
+      const safeY = Math.max(offsets.y, GRID_PLANE_Y + NEURON_SIZE + GRID_CLEARANCE);
+      neuron.position.set(layerX, safeY, offsets.z);
       neuron.userData = {
         originalColor: layer.color,
         activation: 0,
@@ -753,7 +764,7 @@ const buildDenseFallbackNetwork = ({ scene, layers, random, selectedModel, conne
       const topY = Math.max(...layerNodes.map((node) => node.position.y));
       const label = createLabelSprite(layer.name, '#cbd5e1');
       if (label) {
-        label.position.set(layerX, topY + 1.1, 0);
+        label.position.set(layerX, topY + 0.5, 0);
         scene.add(label);
         decorations.push(label);
       }

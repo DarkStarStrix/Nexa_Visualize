@@ -78,4 +78,25 @@ describe('network builder', () => {
     expect(legacyTypes).toContain('generator');
     expect(legacyTypes).toContain('discriminator');
   });
+
+  test('keeps legacy architecture meshes above the grid plane', () => {
+    const scene = new THREE.Scene();
+    const layers = [
+      { neurons: 16, color: 0xffffff, gridSize: [4, 4, 1], name: 'Input Image' },
+      { neurons: 24, color: 0xffffff, gridSize: [6, 4, 1], name: 'Conv Block 1' },
+      { neurons: 20, color: 0xffffff, gridSize: [5, 4, 1], name: 'Conv Block 2' },
+      { neurons: 4, color: 0xffffff, gridSize: [2, 2, 1], name: 'Output' }
+    ];
+
+    const { neurons } = buildDenseNetwork({
+      scene,
+      layers,
+      selectedModel: 'CNN',
+      maxConnections: 200,
+      random: () => 0
+    });
+
+    const minY = Math.min(...neurons.flat().map((node) => node.position.y));
+    expect(minY).toBeGreaterThan(-8);
+  });
 });
