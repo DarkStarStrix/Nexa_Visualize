@@ -48,8 +48,8 @@ const MODEL_PRESETS = {
   ],
   MoE: [
     { neurons: 10, activation: 'Linear', name: 'Token Input' },
-    { neurons: 8, activation: 'ReLU', name: 'Gating' },
-    { neurons: 24, activation: 'ReLU', name: 'Experts' },
+    { neurons: 4, activation: 'ReLU', name: 'Gating' },
+    { neurons: 4, activation: 'ReLU', name: 'Experts' },
     { neurons: 12, activation: 'ReLU', name: 'Router Merge' },
     { neurons: 5, activation: 'Softmax', name: 'Output' }
   ],

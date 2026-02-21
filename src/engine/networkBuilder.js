@@ -526,12 +526,9 @@ const buildLegacyTransformerNetwork = ({ scene, layers, connectionBudget }) => {
 
 const buildLegacyMoeNetwork = ({ scene, layers, connectionBudget }) => {
   const ctx = createLegacyContext({ scene, connectionBudget });
-  const expertsFromPreset = layers?.find((layer) => layer?.name?.toLowerCase().includes('expert'))?.neurons;
-  const expertCount = clamp(Math.round(Math.sqrt(expertsFromPreset || 16)), 4, 8);
+  const expertsLayer = (layers || []).find((layer) => (layer?.name || '').toLowerCase().includes('expert'));
+  const expertCount = clamp(Math.round(expertsLayer?.neurons || 4), 2, 8);
 
-  const inputStage = ctx.addStage([
-    { name: 'Input', type: 'input', geometry: () => new THREE.SphereGeometry(0.8, 16, 12), color: 0x3b82f6, x: 0, y: -2, z: -6 }
-  ]);
   const gateStage = ctx.addStage([
     { name: 'Gating Network', type: 'gate', geometry: () => new THREE.SphereGeometry(1, 16, 12), color: 0xffd700, x: 0, y: 2, z: 0 }
   ]);
@@ -552,17 +549,7 @@ const buildLegacyMoeNetwork = ({ scene, layers, connectionBudget }) => {
   }
   const expertStage = ctx.addStage(expertSpecs);
 
-  const mergeStage = ctx.addStage([
-    { name: 'Router Merge', type: 'merge', geometry: () => new THREE.BoxGeometry(2.0, 2.0, 2.0), color: 0x22c55e, x: 0, y: 0, z: 8 }
-  ]);
-  const outputStage = ctx.addStage([
-    { name: 'Output', type: 'output', geometry: () => new THREE.SphereGeometry(0.7, 16, 12), color: 0xef4444, x: 0, y: 3, z: 12 }
-  ]);
-
-  ctx.connect({ fromLayer: inputStage, fromNeuron: 0, toLayer: gateStage, toNeuron: 0, opacity: 0.2 });
   ctx.connectAll({ fromLayer: gateStage, toLayer: expertStage, opacity: 0.22 });
-  ctx.connectAll({ fromLayer: expertStage, toLayer: mergeStage, opacity: 0.14 });
-  ctx.connect({ fromLayer: mergeStage, fromNeuron: 0, toLayer: outputStage, toNeuron: 0, opacity: 0.24 });
 
   return ctx.finalize();
 };

@@ -99,4 +99,29 @@ describe('network builder', () => {
     const minY = Math.min(...neurons.flat().map((node) => node.position.y));
     expect(minY).toBeGreaterThan(-8);
   });
+
+  test('restores MoE legacy ring style with central gate and experts only', () => {
+    const scene = new THREE.Scene();
+    const layers = [
+      { neurons: 10, color: 0xffffff, gridSize: [5, 2, 1], name: 'Token Input' },
+      { neurons: 4, color: 0xffffff, gridSize: [2, 2, 1], name: 'Gating' },
+      { neurons: 4, color: 0xffffff, gridSize: [2, 2, 1], name: 'Experts' },
+      { neurons: 12, color: 0xffffff, gridSize: [4, 3, 1], name: 'Router Merge' },
+      { neurons: 5, color: 0xffffff, gridSize: [3, 2, 1], name: 'Output' }
+    ];
+
+    const { neurons, connections } = buildDenseNetwork({
+      scene,
+      layers,
+      selectedModel: 'MoE',
+      maxConnections: 200,
+      random: () => 0
+    });
+
+    expect(neurons).toHaveLength(2);
+    expect(neurons[0][0].userData.legacyType).toBe('gate');
+    expect(neurons[1]).toHaveLength(4);
+    expect(neurons[1].every((node) => node.userData.legacyType === 'expert')).toBe(true);
+    expect(connections.length).toBe(4);
+  });
 });
