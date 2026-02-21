@@ -20,19 +20,21 @@ describe('session schema migrations', () => {
     });
 
     expect(migrated.version).toBe(SESSION_SCHEMA_VERSION);
-    expect(migrated.uiState.guidedMode).toBe(false);
-    expect(migrated.uiState.telemetryLevel).toBe('off');
+    expect(migrated.uiState.datasetName).toBe('Spiral');
+    expect(migrated.uiState.selectedScenario).toBe('stable');
+    expect(migrated.uiState.presentationMode).toBe(false);
     expect(migrated.simulation.seed).toBe(DEFAULT_SIMULATION_SEED);
   });
 
-  test('parseSessionPayload sanitizes bad simulation seed and telemetry values', () => {
+  test('parseSessionPayload sanitizes bad simulation seed and ui values', () => {
     const { session, error } = parseSessionPayload({
       version: 3,
       uiState: {
         activePanel: null,
         animationSpeed: 1,
-        guidedMode: true,
-        telemetryLevel: 'verbose'
+        datasetName: 'Unknown',
+        selectedScenario: 'wild',
+        presentationMode: 1
       },
       simulation: {
         seed: -100
@@ -40,7 +42,9 @@ describe('session schema migrations', () => {
     });
 
     expect(error).toBeNull();
-    expect(session.uiState.telemetryLevel).toBe('off');
+    expect(session.uiState.datasetName).toBe('Spiral');
+    expect(session.uiState.selectedScenario).toBe('stable');
+    expect(session.uiState.presentationMode).toBe(true);
     expect(session.simulation.seed).toBe(100);
   });
 });

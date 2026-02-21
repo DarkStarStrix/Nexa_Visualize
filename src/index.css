@@ -24,6 +24,8 @@ select {
 /* layout */
 .relative { position: relative; }
 .absolute { position: absolute; }
+.z-10 { z-index: 10; }
+.z-20 { z-index: 20; }
 .flex { display: flex; }
 .grid { display: grid; }
 .block { display: block; }

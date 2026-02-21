@@ -36,8 +36,9 @@ export const DEFAULT_SESSION_STATE = {
   uiState: {
     activePanel: null,
     animationSpeed: 1,
-    guidedMode: false,
-    telemetryLevel: 'off'
+    datasetName: 'Spiral',
+    selectedScenario: 'stable',
+    presentationMode: false
   },
   simulation: {
     seed: DEFAULT_SIMULATION_SEED
@@ -67,8 +68,14 @@ const sanitizeTrainingParams = (params) => {
   return safe;
 };
 
-const sanitizeTelemetryLevel = (telemetryLevel) => {
-  return telemetryLevel === 'basic' ? 'basic' : 'off';
+const sanitizeDatasetName = (datasetName) => {
+  const allowed = ['Spiral', 'Moons', 'Blobs', 'ImagePatches'];
+  return allowed.includes(datasetName) ? datasetName : 'Spiral';
+};
+
+const sanitizeScenario = (scenario) => {
+  const allowed = ['underfit', 'overfit', 'stable', 'high_lr'];
+  return allowed.includes(scenario) ? scenario : 'stable';
 };
 
 const sanitizeCameraState = (cameraState) => {
@@ -96,8 +103,9 @@ const migrateV2ToV3 = (session) => ({
   version: 3,
   uiState: {
     ...session.uiState,
-    guidedMode: Boolean(session.uiState?.guidedMode),
-    telemetryLevel: sanitizeTelemetryLevel(session.uiState?.telemetryLevel)
+    datasetName: sanitizeDatasetName(session.uiState?.datasetName),
+    selectedScenario: sanitizeScenario(session.uiState?.selectedScenario),
+    presentationMode: Boolean(session.uiState?.presentationMode)
   },
   simulation: {
     seed: sanitizeSeed(session.simulation?.seed)
@@ -131,8 +139,9 @@ export const migrateSession = (session) => {
       animationSpeed: Number.isFinite(migrated.uiState?.animationSpeed)
         ? migrated.uiState.animationSpeed
         : 1,
-      guidedMode: Boolean(migrated.uiState?.guidedMode),
-      telemetryLevel: sanitizeTelemetryLevel(migrated.uiState?.telemetryLevel)
+      datasetName: sanitizeDatasetName(migrated.uiState?.datasetName),
+      selectedScenario: sanitizeScenario(migrated.uiState?.selectedScenario),
+      presentationMode: Boolean(migrated.uiState?.presentationMode)
     },
     simulation: {
       seed: sanitizeSeed(migrated.simulation?.seed)

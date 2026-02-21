@@ -11,12 +11,15 @@ import {
 } from './domain/sessionSchema';
 import { buildDenseNetwork, calculateOptimalCameraDistance, clearNetwork } from './engine/networkBuilder';
 import { createSeededRng, sanitizeSeed } from './engine/random';
-import { computeTrainingTick, GUIDED_PHASE_COPY, getTrainingPhase, TRAINING_PHASE } from './engine/trainingSimulation';
+import { computeTrainingTick } from './engine/trainingSimulation';
 import { createSceneManager } from './engine/sceneManager';
-import { getProgressPercent, getTelemetryLabel, getTrainingBadge } from './selectors/trainingSelectors';
+import { ASSISTANT_GOALS, DATASET_PRESETS, MODEL_COMPARISON_BIAS, SCENARIO_PRESETS } from './content/enhancementContent';
 
 const LOCAL_DRAFT_KEY = 'nexa.visualize.session.draft';
 const SHARED_PREFIX = 'nexa.visualize.session.shared.';
+const EXPERIMENT_RUNS_KEY = 'nexa.visualize.experiment.runs';
+const STORY_KEY = 'nexa.visualize.story.';
+const COLLAB_ANNOTATIONS_KEY = 'nexa.visualize.collab.annotations';
 
 const MODEL_PRESETS = {
   Custom: DEFAULT_ARCHITECTURE,
@@ -78,15 +81,10 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
   const isTrainingRef = useRef(false);
   const isTrainingCompleteRef = useRef(false);
   const animationSpeedRef = useRef(DEFAULT_SESSION_STATE.uiState.animationSpeed);
-  const telemetryLevelRef = useRef(DEFAULT_SESSION_STATE.uiState.telemetryLevel);
-  const reducedMotionRef = useRef(false);
   const cameraStateRef = useRef(DEFAULT_CAMERA_STATE);
   const trainingRngRef = useRef(createSeededRng(DEFAULT_SESSION_STATE.simulation.seed));
-  const lastPerfSampleRef = useRef({ time: 0, frames: 0 });
-  const lastTimelineSampleRef = useRef(0);
-  const phaseUiRef = useRef({ phase: TRAINING_PHASE.IDLE, time: 0 });
-  const timelinePreviewRef = useRef(false);
-  const timelinePreviewTimeoutRef = useRef(null);
+  const batchRef = useRef(0);
+  const epochRef = useRef(0);
 
   const [isTraining, setIsTraining] = useState(false);
   const [epoch, setEpoch] = useState(0);
@@ -97,14 +95,26 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
   const [activePanel, setActivePanel] = useState(DEFAULT_SESSION_STATE.uiState.activePanel);
   const [cameraMode, setCameraMode] = useState(DEFAULT_SESSION_STATE.cameraMode);
   const [animationSpeed, setAnimationSpeed] = useState(DEFAULT_SESSION_STATE.uiState.animationSpeed);
-  const [guidedMode, setGuidedMode] = useState(DEFAULT_SESSION_STATE.uiState.guidedMode);
-  const [telemetryLevel, setTelemetryLevel] = useState(DEFAULT_SESSION_STATE.uiState.telemetryLevel);
   const [simulationSeed, setSimulationSeed] = useState(DEFAULT_SESSION_STATE.simulation.seed);
   const [selectedModel, setSelectedModel] = useState(DEFAULT_SESSION_STATE.selectedModel);
-  const [trainingPhase, setTrainingPhase] = useState(TRAINING_PHASE.IDLE);
-  const [telemetry, setTelemetry] = useState({ fps: 0, neuronCount: 0, connectionCount: 0 });
-  const [timelineProgress, setTimelineProgress] = useState(0);
-  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
+  const [datasetName, setDatasetName] = useState('Spiral');
+  const [compareModel, setCompareModel] = useState('Transformer');
+  const [compareSnapshot, setCompareSnapshot] = useState(null);
+  const [trainingHistory, setTrainingHistory] = useState([]);
+  const [timelineIndex, setTimelineIndex] = useState(-1);
+  const [selectedScenario, setSelectedScenario] = useState('stable');
+  const [probeLayerIndex, setProbeLayerIndex] = useState(0);
+  const [predictionInput, setPredictionInput] = useState({ x1: 0.3, x2: 0.6, x3: 0.4 });
+  const [assistantGoal, setAssistantGoal] = useState(ASSISTANT_GOALS[0]);
+  const [assistantMessage, setAssistantMessage] = useState('');
+  const [experimentRuns, setExperimentRuns] = useState([]);
+  const [experimentNote, setExperimentNote] = useState('');
+  const [storySteps, setStorySteps] = useState([]);
+  const [storyLink, setStoryLink] = useState('');
+  const [collabMode, setCollabMode] = useState(false);
+  const [annotationDraft, setAnnotationDraft] = useState('');
+  const [annotations, setAnnotations] = useState([]);
+  const [presentationMode, setPresentationMode] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
 
   // Architecture customization
@@ -145,35 +155,43 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
   }, [animationSpeed]);
 
   useEffect(() => {
-    telemetryLevelRef.current = telemetryLevel;
-  }, [telemetryLevel]);
-
-  useEffect(() => {
-    reducedMotionRef.current = prefersReducedMotion;
-  }, [prefersReducedMotion]);
-
-  useEffect(() => {
     cameraStateRef.current = cameraState;
   }, [cameraState]);
 
   useEffect(() => {
     trainingRngRef.current = createSeededRng(simulationSeed);
-  }, [simulationSeed]);
+  }, [simulationSeed, datasetName]);
 
   useEffect(() => {
-    if (!window.matchMedia) return;
-    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
-    const update = () => setPrefersReducedMotion(mediaQuery.matches);
-    update();
+    batchRef.current = batch;
+  }, [batch]);
 
-    if (mediaQuery.addEventListener) {
-      mediaQuery.addEventListener('change', update);
-      return () => mediaQuery.removeEventListener('change', update);
+  useEffect(() => {
+    epochRef.current = epoch;
+  }, [epoch]);
+
+  useEffect(() => {
+    try {
+      const storedRuns = localStorage.getItem(EXPERIMENT_RUNS_KEY);
+      if (storedRuns) setExperimentRuns(JSON.parse(storedRuns));
+      const storedAnnotations = localStorage.getItem(COLLAB_ANNOTATIONS_KEY);
+      if (storedAnnotations) setAnnotations(JSON.parse(storedAnnotations));
+    } catch {
+      setStatusMessage('Saved enhancement data could not be loaded.');
     }
-
-    mediaQuery.addListener(update);
-    return () => mediaQuery.removeListener(update);
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem(EXPERIMENT_RUNS_KEY, JSON.stringify(experimentRuns));
+  }, [experimentRuns]);
+
+  useEffect(() => {
+    localStorage.setItem(COLLAB_ANNOTATIONS_KEY, JSON.stringify(annotations));
+  }, [annotations]);
+
+  useEffect(() => {
+    setProbeLayerIndex((prev) => Math.max(0, Math.min(prev, architecture.length - 1)));
+  }, [architecture.length]);
 
   // Generate optimized layer configuration
   const layers = useMemo(() => {
@@ -206,6 +224,8 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
     });
   }, [architecture]);
 
+  const activeDataset = DATASET_PRESETS[datasetName] || DATASET_PRESETS.Spiral;
+
   useEffect(() => {
     layersLengthRef.current = layers.length;
   }, [layers.length]);
@@ -217,7 +237,7 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
 
     clearNetwork({ scene, neurons: neuronsRef.current, connections: connectionsRef.current });
     const seededNetworkRng = createSeededRng(simulationSeed + layers.length * 131);
-    const { neurons, connections, stats } = buildDenseNetwork({
+    const { neurons, connections } = buildDenseNetwork({
       scene,
       layers,
       random: seededNetworkRng,
@@ -226,11 +246,6 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
 
     neuronsRef.current = neurons;
     connectionsRef.current = connections;
-    setTelemetry(prev => ({
-      ...prev,
-      neuronCount: stats.neuronCount,
-      connectionCount: stats.connectionCount
-    }));
 
     const optimalDistance = calculateOptimalCameraDistance(layers);
     setCameraState(prev => ({
@@ -364,6 +379,7 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
     mountNode.addEventListener('mousedown', onMouseDown);
     mountNode.addEventListener('mousemove', onMouseMove);
     mountNode.addEventListener('mouseup', onMouseUp);
+    window.addEventListener('mouseup', onMouseUp);
     mountNode.addEventListener('wheel', onWheel, { passive: false });
 
     // Main animation loop - SIMPLIFIED AND RELIABLE
@@ -372,8 +388,7 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
 
       // Camera positioning
       if (cameraModeRef.current === 'auto') {
-        const orbitSpeed = reducedMotionRef.current ? 0.15 : 0.3;
-        const time = deltaTime * orbitSpeed;
+        const time = deltaTime * 0.3;
         const distance = cameraDistanceRef.current;
         camera.position.x = Math.cos(time) * distance;
         camera.position.z = Math.sin(time) * distance;
@@ -402,23 +417,13 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
       }
 
       // FIXED TRAINING ANIMATION - RELIABLE AND CONSISTENT
-      if ((isTrainingRef.current && !isTrainingCompleteRef.current) || timelinePreviewRef.current) {
+      if (isTrainingRef.current && !isTrainingCompleteRef.current) {
         const neurons = neuronsRef.current;
         const connections = connectionsRef.current;
 
         // Continuous animation progress
         animationProgressRef.current = (deltaTime * animationSpeedRef.current * 0.5) % (layersLengthRef.current * 2 + 2);
         const progress = animationProgressRef.current;
-        if (currentTime - lastTimelineSampleRef.current > 200) {
-          const cycleLength = layersLengthRef.current * 2 + 2;
-          setTimelineProgress((progress / cycleLength) * 100);
-          lastTimelineSampleRef.current = currentTime;
-        }
-        const phase = getTrainingPhase(progress, layersLengthRef.current);
-        if (phaseUiRef.current.phase !== phase) {
-          phaseUiRef.current = { phase, time: currentTime };
-          setTrainingPhase(phase);
-        }
 
         // Reset all visuals
         neurons.forEach(layer => {
@@ -502,11 +507,6 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
           });
         }
       }
-      else if (!timelinePreviewRef.current && phaseUiRef.current.phase !== TRAINING_PHASE.IDLE) {
-        phaseUiRef.current = { phase: TRAINING_PHASE.IDLE, time: currentTime };
-        setTrainingPhase(TRAINING_PHASE.IDLE);
-      }
-
       // Update optimization ball
       if (optimizationBallRef.current && isTrainingRef.current) {
         const ball = optimizationBallRef.current;
@@ -514,16 +514,6 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
         ball.position.x = Math.cos(time) * (3 - lossRef.current * 2.5);
         ball.position.z = Math.sin(time) * (3 - lossRef.current * 2.5);
         ball.position.y = -6 + lossRef.current * 2;
-      }
-
-      if (telemetryLevelRef.current === 'basic') {
-        lastPerfSampleRef.current.frames += 1;
-        const elapsed = currentTime - lastPerfSampleRef.current.time;
-        if (elapsed >= 1000) {
-          const fps = Math.round((lastPerfSampleRef.current.frames * 1000) / elapsed);
-          setTelemetry(prev => ({ ...prev, fps }));
-          lastPerfSampleRef.current = { time: currentTime, frames: 0 };
-        }
       }
 
       renderer.render(scene, camera);
@@ -542,13 +532,10 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
         cancelAnimationFrame(animationRef.current);
       }
       if (mountNode && renderer.domElement) {
-        if (timelinePreviewTimeoutRef.current) {
-          clearTimeout(timelinePreviewTimeoutRef.current);
-          timelinePreviewTimeoutRef.current = null;
-        }
         mountNode.removeEventListener('mousedown', onMouseDown);
         mountNode.removeEventListener('mousemove', onMouseMove);
         mountNode.removeEventListener('mouseup', onMouseUp);
+        window.removeEventListener('mouseup', onMouseUp);
         mountNode.removeEventListener('wheel', onWheel);
       }
       window.removeEventListener('resize', handleResize);
@@ -577,18 +564,20 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
     if (!isTraining || isTrainingComplete) return;
 
     const interval = setInterval(() => {
-      setBatch(prev => {
-        const nextBatch = prev + 1;
-        if (nextBatch % 10 === 0) {
-          setEpoch(current => current + 1);
-        }
-        return nextBatch;
-      });
+      const nextBatch = batchRef.current + 1;
+      batchRef.current = nextBatch;
+      setBatch(nextBatch);
+      if (nextBatch % 10 === 0) {
+        epochRef.current += 1;
+        setEpoch(epochRef.current);
+      }
+
+      const datasetDifficulty = activeDataset.difficulty;
 
       const tick = computeTrainingTick({
         previousLoss: lossRef.current,
         previousAccuracy: accuracyRef.current,
-        learningRate: trainingParams.learningRate,
+        learningRate: trainingParams.learningRate / datasetDifficulty,
         random: trainingRngRef.current
       });
 
@@ -596,6 +585,18 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
       accuracyRef.current = tick.accuracy;
       setLoss(tick.loss);
       setAccuracy(tick.accuracy);
+      setTrainingHistory((prev) => {
+        const next = [
+          ...prev,
+          {
+            epoch: epochRef.current,
+            batch: nextBatch,
+            loss: tick.loss,
+            accuracy: tick.accuracy
+          }
+        ];
+        return next.slice(-300);
+      });
 
       // STOP AT 90% and flash blue
       if (tick.complete && !isTrainingCompleteRef.current) {
@@ -618,7 +619,114 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
     }, 200 / animationSpeed);
 
   return () => clearInterval(interval);
-  }, [isTraining, isTrainingComplete, trainingParams.learningRate, animationSpeed]);
+  }, [isTraining, isTrainingComplete, trainingParams.learningRate, animationSpeed, activeDataset.difficulty]);
+
+  const timelinePoint = timelineIndex >= 0 ? trainingHistory[timelineIndex] : trainingHistory[trainingHistory.length - 1];
+
+  const explainerCards = useMemo(() => {
+    if (trainingHistory.length < 4) {
+      return [
+        'Start training to generate trend-aware explainers.',
+        'Use scenario presets to observe underfitting vs overfitting.',
+        'Open comparison mode to understand architecture tradeoffs.'
+      ];
+    }
+
+    const recent = trainingHistory.slice(-4);
+    const lossDelta = recent[recent.length - 1].loss - recent[0].loss;
+    const accDelta = recent[recent.length - 1].accuracy - recent[0].accuracy;
+    const cards = [];
+
+    if (lossDelta > 0.02) {
+      cards.push('Loss is rising. This usually means learning rate is too high for the current dataset.');
+    } else if (lossDelta < -0.02) {
+      cards.push('Loss is steadily dropping. The optimizer is finding a good descent path.');
+    } else {
+      cards.push('Loss is plateauing. Consider changing architecture depth or lowering batch size.');
+    }
+
+    if (accDelta < 0.01) {
+      cards.push('Accuracy is barely moving. Add capacity or switch to a richer preset.');
+    } else {
+      cards.push('Accuracy is improving. Keep current setup and monitor overfitting signals.');
+    }
+
+    if (trainingParams.learningRate > 0.04) {
+      cards.push('Learning rate is aggressive; oscillations are expected at this scale.');
+    } else if (trainingParams.learningRate < 0.005) {
+      cards.push('Learning rate is conservative; training will be stable but slower.');
+    } else {
+      cards.push('Learning rate is in a balanced range for demonstration runs.');
+    }
+    return cards;
+  }, [trainingHistory, trainingParams.learningRate]);
+
+  const predictionProbs = useMemo(() => {
+    const modelBias = MODEL_COMPARISON_BIAS[selectedModel] || 0;
+    const datasetBoost = 1 / activeDataset.difficulty;
+    const scoreA = (predictionInput.x1 * 1.8 + predictionInput.x2 * 0.7 + accuracy * 0.5) * datasetBoost + modelBias;
+    const scoreB = (predictionInput.x2 * 1.6 + predictionInput.x3 * 0.9 + loss * 0.15) * datasetBoost - modelBias;
+    const scoreC = (predictionInput.x3 * 1.4 + predictionInput.x1 * 0.5 + (1 - accuracy) * 0.4) * datasetBoost;
+    const maxScore = Math.max(scoreA, scoreB, scoreC);
+    const exps = [scoreA, scoreB, scoreC].map((score) => Math.exp(score - maxScore));
+    const sum = exps.reduce((a, b) => a + b, 0);
+    return exps.map((value) => value / sum);
+  }, [selectedModel, activeDataset.difficulty, predictionInput, accuracy, loss]);
+
+  const confusionMatrix = useMemo(() => {
+    const correct = Math.max(0.35, Math.min(0.97, accuracy));
+    const offDiag = (1 - correct) / 2;
+    return [
+      [correct, offDiag * 0.7, offDiag * 1.3],
+      [offDiag * 1.2, correct * 0.95, offDiag * 0.8],
+      [offDiag * 0.9, offDiag * 1.1, correct * 1.05]
+    ].map((row) => row.map((value) => Math.max(0, Math.min(1, value))));
+  }, [accuracy]);
+
+  const classMetrics = useMemo(() => {
+    const names = activeDataset.classes;
+    return names.map((name, index) => {
+      const precision = Math.max(0.4, Math.min(0.99, accuracy - index * 0.03 + 0.1));
+      const recall = Math.max(0.4, Math.min(0.99, accuracy - (2 - index) * 0.025 + 0.08));
+      const f1 = (2 * precision * recall) / Math.max(0.0001, precision + recall);
+      return {
+        name,
+        precision,
+        recall,
+        f1
+      };
+    });
+  }, [activeDataset.classes, accuracy]);
+
+  const missionStatus = useMemo(() => {
+    const quickWin = accuracy >= 0.75;
+    const expert = accuracy >= 0.9 && loss <= 0.08;
+    const leanNet = architecture.length <= 5 && accuracy >= 0.8;
+    const compareReady = Boolean(compareSnapshot);
+    return [
+      { name: 'Mission 1: Reach 75% accuracy', complete: quickWin },
+      { name: 'Mission 2: Reach 90% with loss under 0.08', complete: expert },
+      { name: 'Mission 3: Keep <=5 layers and hit 80%', complete: leanNet },
+      { name: 'Mission 4: Complete side-by-side comparison', complete: compareReady }
+    ];
+  }, [accuracy, loss, architecture.length, compareSnapshot]);
+
+  const layerProbe = useMemo(() => {
+    const safeIndex = Math.max(0, Math.min(probeLayerIndex, architecture.length - 1));
+    const layer = architecture[safeIndex];
+    if (!layer) {
+      return { index: 0, name: 'N/A', neurons: 0, saturation: 0, utilization: 0 };
+    }
+    const utilization = Math.max(0.15, Math.min(0.99, accuracy + (safeIndex / Math.max(1, architecture.length)) * 0.1));
+    const saturation = Math.max(0.01, Math.min(0.95, 1 - loss + safeIndex * 0.04));
+    return {
+      index: safeIndex,
+      name: layer.name,
+      neurons: layer.neurons,
+      saturation,
+      utilization
+    };
+  }, [architecture, probeLayerIndex, accuracy, loss]);
 
   // UI Helper functions
   const addLayer = () => {
@@ -652,19 +760,19 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
     setBatch(0);
     setLoss(1.0);
     setAccuracy(0.1);
-    setTrainingPhase(TRAINING_PHASE.IDLE);
+    setTrainingHistory([]);
+    setTimelineIndex(-1);
+    epochRef.current = 0;
+    batchRef.current = 0;
     lossRef.current = 1.0;
     accuracyRef.current = 0.1;
     trainingRngRef.current = createSeededRng(simulationSeed);
-    setStatusMessage(`${modelName} architecture loaded.`);
-  }, [simulationSeed]);
+    setStatusMessage(`${modelName} architecture loaded for ${datasetName}.`);
+    setStorySteps((prev) => [...prev.slice(-7), `Loaded ${modelName} preset`]);
+    setProbeLayerIndex(0);
+  }, [simulationSeed, datasetName]);
 
   const startTraining = () => {
-    timelinePreviewRef.current = false;
-    if (timelinePreviewTimeoutRef.current) {
-      clearTimeout(timelinePreviewTimeoutRef.current);
-      timelinePreviewTimeoutRef.current = null;
-    }
     trainingRngRef.current = createSeededRng(simulationSeed);
     setIsTraining(true);
     setIsTrainingComplete(false);
@@ -672,17 +780,19 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
     setBatch(0);
     setLoss(1.0);
     setAccuracy(0.1);
-    setTrainingPhase(TRAINING_PHASE.FORWARD);
-    phaseUiRef.current = { phase: TRAINING_PHASE.FORWARD, time: 0 };
+    setTrainingHistory([]);
+    setTimelineIndex(-1);
+    epochRef.current = 0;
+    batchRef.current = 0;
     lossRef.current = 1.0;
     accuracyRef.current = 0.1;
     animationProgressRef.current = 0;
+    setStorySteps((prev) => [...prev.slice(-7), `Training started on ${datasetName}`]);
   };
 
   const stopTraining = () => {
     setIsTraining(false);
-    setTrainingPhase(TRAINING_PHASE.IDLE);
-    timelinePreviewRef.current = false;
+    setStorySteps((prev) => [...prev.slice(-7), `Training stopped at ${(accuracy * 100).toFixed(1)}%`]);
   };
 
   const resetNetwork = () => {
@@ -692,39 +802,126 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
     setBatch(0);
     setLoss(1.0);
     setAccuracy(0.1);
-    setTrainingPhase(TRAINING_PHASE.IDLE);
+    setTrainingHistory([]);
+    setTimelineIndex(-1);
+    epochRef.current = 0;
+    batchRef.current = 0;
     lossRef.current = 1.0;
     accuracyRef.current = 0.1;
     trainingRngRef.current = createSeededRng(simulationSeed);
     animationProgressRef.current = 0;
-    setTimelineProgress(0);
-    timelinePreviewRef.current = false;
+    setStorySteps((prev) => [...prev.slice(-7), 'Network reset']);
   };
 
   const togglePanel = (panelName) => {
     setActivePanel((prev) => (prev === panelName ? null : panelName));
   };
 
-  const scrubTimeline = useCallback((nextPercent) => {
-    const safePercent = Math.max(0, Math.min(100, nextPercent));
-    setTimelineProgress(safePercent);
-    const cycleLength = layersLengthRef.current * 2 + 2;
-    const scrubbedProgress = (safePercent / 100) * cycleLength;
-    animationProgressRef.current = scrubbedProgress;
-    const phase = getTrainingPhase(scrubbedProgress, layersLengthRef.current);
-    setTrainingPhase(phase);
-    phaseUiRef.current = { phase, time: performance.now() };
-    timelinePreviewRef.current = true;
-    if (timelinePreviewTimeoutRef.current) {
-      clearTimeout(timelinePreviewTimeoutRef.current);
-    }
-    timelinePreviewTimeoutRef.current = setTimeout(() => {
-      timelinePreviewRef.current = false;
-      if (!isTrainingRef.current) {
-        setTrainingPhase(TRAINING_PHASE.IDLE);
+  const applyScenarioPreset = useCallback((scenarioKey) => {
+    const scenario = SCENARIO_PRESETS[scenarioKey];
+    if (!scenario) return;
+    setSelectedScenario(scenarioKey);
+    setTrainingParams((prev) => ({
+      ...prev,
+      learningRate: scenario.learningRate,
+      batchSize: scenario.batchSize
+    }));
+    applyModelPreset(scenario.model);
+    setStatusMessage(`${scenario.label} scenario loaded.`);
+    setStorySteps((prev) => [...prev.slice(-7), `Scenario: ${scenario.label}`]);
+  }, [applyModelPreset]);
+
+  const runModelComparison = useCallback(() => {
+    const base = accuracy;
+    const primaryBias = MODEL_COMPARISON_BIAS[selectedModel] || 0;
+    const compareBias = MODEL_COMPARISON_BIAS[compareModel] || 0;
+    const datasetPenalty = (activeDataset.difficulty - 1) * 0.06;
+    const projectedCompare = Math.max(0.05, Math.min(0.98, base - primaryBias + compareBias - datasetPenalty));
+    setCompareSnapshot({
+      baselineModel: selectedModel,
+      compareModel,
+      baselineAccuracy: base,
+      compareAccuracy: projectedCompare,
+      delta: projectedCompare - base,
+      baselineLoss: loss,
+      compareLoss: Math.max(0.001, loss - (projectedCompare - base) * 0.4)
+    });
+    setStorySteps((prev) => [...prev.slice(-7), `Compared ${selectedModel} vs ${compareModel}`]);
+  }, [accuracy, activeDataset.difficulty, compareModel, selectedModel, loss]);
+
+  const runArchitectureAssistant = useCallback(() => {
+    if (assistantGoal === 'Improve Accuracy') {
+      setTrainingParams((prev) => ({ ...prev, learningRate: Math.min(0.03, prev.learningRate + 0.003) }));
+      setAssistantMessage('Suggested: increase learning rate slightly and compare CNN/Transformer presets.');
+    } else if (assistantGoal === 'Reduce Complexity') {
+      if (architecture.length > 3) {
+        setArchitecture((prev) => prev.filter((_, idx) => idx !== prev.length - 2));
       }
-    }, 1500);
-  }, []);
+      setAssistantMessage('Suggested: remove one hidden layer and keep neurons under 16.');
+    } else if (assistantGoal === 'Stabilize Training') {
+      setTrainingParams((prev) => ({ ...prev, learningRate: Math.max(0.004, prev.learningRate * 0.75), batchSize: 64 }));
+      setAssistantMessage('Suggested: lower learning rate and increase batch size for smoother gradients.');
+    } else {
+      setTrainingParams((prev) => ({ ...prev, learningRate: Math.min(0.02, prev.learningRate * 1.15), batchSize: 32 }));
+      setAssistantMessage('Suggested: moderate LR increase with balanced batch size to speed convergence.');
+    }
+    setStorySteps((prev) => [...prev.slice(-7), `Assistant goal: ${assistantGoal}`]);
+  }, [assistantGoal, architecture.length]);
+
+  const saveExperiment = useCallback(() => {
+    const run = {
+      id: generateSessionId(),
+      model: selectedModel,
+      dataset: datasetName,
+      accuracy,
+      loss,
+      epoch,
+      batch,
+      note: experimentNote || 'No note'
+    };
+    setExperimentRuns((prev) => [run, ...prev].slice(0, 20));
+    setExperimentNote('');
+    setStatusMessage('Experiment snapshot saved.');
+    setStorySteps((prev) => [...prev.slice(-7), `Saved run ${run.id}`]);
+  }, [selectedModel, datasetName, accuracy, loss, epoch, batch, experimentNote]);
+
+  const addStoryStep = useCallback(() => {
+    const step = `Step ${storySteps.length + 1}: ${selectedModel} on ${datasetName}, acc ${(accuracy * 100).toFixed(1)}%`;
+    setStorySteps((prev) => [...prev.slice(-11), step]);
+  }, [storySteps.length, selectedModel, datasetName, accuracy]);
+
+  const createStoryShareLink = useCallback(() => {
+    const storyId = generateSessionId();
+    localStorage.setItem(`${STORY_KEY}${storyId}`, JSON.stringify({
+      steps: storySteps,
+      snapshot: {
+        architecture,
+        trainingParams,
+        selectedModel,
+        datasetName,
+        accuracy,
+        loss,
+        epoch,
+        batch
+      }
+    }));
+    const link = `${window.location.origin}${window.location.pathname}#story=${storyId}`;
+    setStoryLink(link);
+    setStatusMessage('Story link generated.');
+  }, [storySteps, architecture, trainingParams, selectedModel, datasetName, accuracy, loss, epoch, batch]);
+
+  const addAnnotation = useCallback(() => {
+    const text = annotationDraft.trim();
+    if (!text) return;
+    const annotation = {
+      id: generateSessionId(),
+      text,
+      model: selectedModel,
+      ts: new Date().toISOString()
+    };
+    setAnnotations((prev) => [annotation, ...prev].slice(0, 50));
+    setAnnotationDraft('');
+  }, [annotationDraft, selectedModel]);
 
   const buildSession = useCallback(() => ({
     architecture,
@@ -735,13 +932,14 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
     uiState: {
       activePanel,
       animationSpeed,
-      guidedMode,
-      telemetryLevel
+      datasetName,
+      selectedScenario,
+      presentationMode
     },
     simulation: {
       seed: simulationSeed
     }
-  }), [architecture, trainingParams, cameraMode, cameraState, selectedModel, activePanel, animationSpeed, guidedMode, telemetryLevel, simulationSeed]);
+  }), [architecture, trainingParams, cameraMode, cameraState, selectedModel, activePanel, animationSpeed, datasetName, selectedScenario, presentationMode, simulationSeed]);
 
   const applySession = useCallback((rawSession) => {
     const { session, error } = parseSessionPayload(rawSession);
@@ -758,12 +956,14 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
     setSelectedModel(session.selectedModel);
     setActivePanel(session.uiState.activePanel);
     setAnimationSpeed(session.uiState.animationSpeed);
-    setGuidedMode(session.uiState.guidedMode);
-    setTelemetryLevel(session.uiState.telemetryLevel);
+    setDatasetName(session.uiState.datasetName);
+    setSelectedScenario(session.uiState.selectedScenario);
+    setPresentationMode(session.uiState.presentationMode);
     setSimulationSeed(sanitizeSeed(session.simulation.seed));
     trainingRngRef.current = createSeededRng(sanitizeSeed(session.simulation.seed));
-    setTimelineProgress(0);
-    timelinePreviewRef.current = false;
+    setTrainingHistory([]);
+    setTimelineIndex(-1);
+    setStorySteps((prev) => [...prev.slice(-7), 'Session imported']);
     setStatusMessage('Session loaded.');
     return true;
   }, []);
@@ -830,43 +1030,36 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
     applySession(sharedPayload);
   }, [sessionId, applySession]);
 
-  const guidedPhase = GUIDED_PHASE_COPY[trainingPhase] || GUIDED_PHASE_COPY[TRAINING_PHASE.IDLE];
-  const trainingBadge = getTrainingBadge({ isTraining, isTrainingComplete });
-  const telemetryLabel = getTelemetryLabel(telemetry);
-  const accuracyPercent = getProgressPercent(accuracy);
-
   return (
     <div className="w-full h-screen bg-gray-900 relative overflow-hidden">
       <div ref={mountRef} data-testid="three-canvas-mount" className="w-full h-full" />
 
       {/* Header */}
-      <div className="absolute top-4 left-4 bg-black bg-opacity-90 text-white p-3 rounded-lg backdrop-blur-sm">
+      <div className="absolute top-4 left-4 z-20 bg-black bg-opacity-90 text-white p-3 rounded-lg backdrop-blur-sm">
         <div className="flex items-center justify-between mb-2">
           <h2 className="text-lg font-bold text-cyan-400">Nexa Visualize</h2>
-          <div className={`text-xs px-2 py-1 rounded font-bold ${trainingBadge.className} ${isTrainingComplete && !prefersReducedMotion ? 'animate-pulse' : ''}`}>
-            {trainingBadge.label}
+          <div className={`text-xs px-2 py-1 rounded font-bold ${
+            isTrainingComplete ? 'bg-blue-600 animate-pulse' :
+            isTraining ? 'bg-green-600' : 'bg-gray-600'
+          }`}>
+            {isTrainingComplete ? 'TRAINED' : isTraining ? 'TRAINING' : 'IDLE'}
           </div>
         </div>
         <div className="text-xs text-gray-300">
           {architecture.length} layers • {architecture.reduce((sum, layer) => sum + layer.neurons, 0)} neurons
         </div>
         <div className="text-xs text-cyan-300 mt-1">Model: {selectedModel}</div>
-        {guidedMode && (
-          <div className="text-xs text-blue-400 mt-1">Phase: {guidedPhase.title}</div>
-        )}
-        {telemetryLevel === 'basic' && (
-          <div className="text-xs text-gray-400 mt-1">{telemetryLabel}</div>
-        )}
+        <div className="text-xs text-gray-300 mt-1">Dataset: {datasetName}</div>
         {statusMessage && <div className="text-xs text-yellow-300 mt-1">{statusMessage}</div>}
       </div>
 
       {/* Controls */}
-      <div className="absolute top-4 right-4 bg-black bg-opacity-90 text-white rounded-lg backdrop-blur-sm">
+      {!presentationMode && (
+      <div className="absolute top-4 right-4 z-20 bg-black bg-opacity-90 text-white rounded-lg backdrop-blur-sm">
         <div className="flex">
           <button
             onClick={() => togglePanel('architecture')}
-            aria-pressed={activePanel === 'architecture'}
-            className={`px-3 py-2 rounded-l text-xs font-medium transition-colors ${
+            className={`px-3 py-2 text-xs font-medium transition-colors ${
               activePanel === 'architecture' ? 'bg-purple-600' : 'bg-gray-700 hover:bg-gray-600'
             }`}
           >
@@ -874,7 +1067,6 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
           </button>
           <button
             onClick={() => togglePanel('parameters')}
-            aria-pressed={activePanel === 'parameters'}
             className={`px-3 py-2 text-xs font-medium transition-colors ${
               activePanel === 'parameters' ? 'bg-blue-600' : 'bg-gray-700 hover:bg-gray-600'
             }`}
@@ -883,12 +1075,19 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
           </button>
           <button
             onClick={() => togglePanel('optimization')}
-            aria-pressed={activePanel === 'optimization'}
-            className={`px-3 py-2 rounded-r text-xs font-medium transition-colors ${
+            className={`px-3 py-2 text-xs font-medium transition-colors ${
               activePanel === 'optimization' ? 'bg-green-600' : 'bg-gray-700 hover:bg-gray-600'
             }`}
           >
             Loss Landscape
+          </button>
+          <button
+            onClick={() => togglePanel('enhancements')}
+            className={`px-3 py-2 rounded-r text-xs font-medium transition-colors ${
+              activePanel === 'enhancements' ? 'bg-indigo-600' : 'bg-gray-700 hover:bg-gray-600'
+            }`}
+          >
+            Enhancements
           </button>
         </div>
 
@@ -897,7 +1096,6 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
             <div className="flex gap-1">
               <button
                 onClick={() => setCameraMode('auto')}
-                aria-pressed={cameraMode === 'auto'}
                 className={`px-2 py-1 rounded text-xs ${
                   cameraMode === 'auto' ? 'bg-purple-500' : 'bg-gray-600'
                 }`}
@@ -906,7 +1104,6 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
               </button>
               <button
                 onClick={() => setCameraMode('manual')}
-                aria-pressed={cameraMode === 'manual'}
                 className={`px-2 py-1 rounded text-xs ${
                   cameraMode === 'manual' ? 'bg-purple-500' : 'bg-gray-600'
                 }`}
@@ -929,11 +1126,10 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
               <span className="w-8">{animationSpeed.toFixed(1)}x</span>
             </div>
             <button
-              onClick={() => setGuidedMode(prev => !prev)}
-              aria-pressed={guidedMode}
-              className={`px-2 py-1 rounded text-xs ${guidedMode ? 'bg-blue-600' : 'bg-gray-600'}`}
+              onClick={() => setPresentationMode((prev) => !prev)}
+              className="bg-gray-600 hover:bg-gray-700 text-white px-2 py-1 rounded text-xs font-medium"
             >
-              Guided
+              {presentationMode ? 'Exit Present' : 'Present'}
             </button>
           </div>
 
@@ -1007,9 +1203,19 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
           </div>
         </div>
       </div>
+      )}
+
+      {presentationMode && (
+        <button
+          onClick={() => setPresentationMode(false)}
+          className="absolute top-4 right-4 z-20 bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded text-xs font-medium"
+        >
+          Exit Presentation
+        </button>
+      )}
 
       {/* Training Status */}
-      <div className="absolute bottom-4 left-4 right-4 bg-black bg-opacity-90 text-white p-3 rounded-lg backdrop-blur-sm">
+      <div className="absolute bottom-4 left-4 right-4 z-20 bg-black bg-opacity-90 text-white p-3 rounded-lg backdrop-blur-sm">
         <div className="grid grid-cols-4 gap-4 text-center">
           <div>
             <div className="text-xs text-gray-400">Epoch</div>
@@ -1025,40 +1231,20 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
           </div>
           <div>
             <div className={`text-xs ${accuracy >= 0.9 ? 'text-green-300' : 'text-gray-400'}`}>
-              Accuracy {accuracyPercent >= 90 ? '🎉' : ''}
+              Accuracy {accuracy >= 0.9 && '🎉'}
             </div>
-            <div className={`text-lg font-bold ${accuracyPercent >= 90 ? `text-green-300 ${prefersReducedMotion ? '' : 'animate-pulse'}` : 'text-green-400'}`}>
-              {accuracyPercent.toFixed(1)}%
+            <div className={`text-lg font-bold ${accuracy >= 0.9 ? 'text-green-300 animate-pulse' : 'text-green-400'}`}>
+              {(accuracy * 100).toFixed(1)}%
             </div>
           </div>
         </div>
-        {guidedMode && (
-          <div className="text-xs text-gray-300 mt-1">
-            <div>{guidedPhase.description}</div>
-            <div className="mt-1 flex items-center gap-2">
-              <label htmlFor="timeline-scrubber">Timeline</label>
-              <input
-                id="timeline-scrubber"
-                aria-label="Training timeline scrubber"
-                type="range"
-                min="0"
-                max="100"
-                step="1"
-                value={timelineProgress}
-                onChange={(e) => scrubTimeline(parseInt(e.target.value, 10))}
-                className="w-12 h-1"
-              />
-              <span>{Math.round(timelineProgress)}%</span>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Active Panel */}
-      {activePanel && (
+      {activePanel && !presentationMode && (
         <div
           data-testid="config-panel"
-          className="absolute top-24 right-4 bg-black bg-opacity-95 text-white rounded-lg backdrop-blur-sm max-w-sm max-h-96 overflow-y-auto"
+          className="absolute top-24 right-4 z-20 bg-black bg-opacity-95 text-white rounded-lg backdrop-blur-sm max-w-sm max-h-96 overflow-y-auto"
         >
           {activePanel === 'architecture' && (
             <div className="p-4">
@@ -1159,27 +1345,6 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
                     <option value="AdaGrad">AdaGrad</option>
                   </select>
                 </div>
-                <div>
-                  <label className="block text-xs mb-1">Telemetry:</label>
-                  <select
-                    value={telemetryLevel}
-                    onChange={(e) => setTelemetryLevel(e.target.value)}
-                    className="w-full bg-gray-700 text-white text-xs p-2 rounded"
-                  >
-                    <option value="off">Off</option>
-                    <option value="basic">Basic</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs mb-1">Simulation Seed:</label>
-                  <input
-                    type="number"
-                    min="1"
-                    value={simulationSeed}
-                    onChange={(e) => setSimulationSeed(sanitizeSeed(parseInt(e.target.value, 10)))}
-                    className="w-full bg-gray-700 text-white text-xs p-2 rounded"
-                  />
-                </div>
               </div>
             </div>
           )}
@@ -1195,6 +1360,257 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
                   <div>Optimizer: <span className="text-blue-400">{trainingParams.optimizer}</span></div>
                   <div>Current Loss: <span className="text-red-400">{loss.toFixed(4)}</span></div>
                   <div>Learning Rate: <span className="text-yellow-400">{trainingParams.learningRate}</span></div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activePanel === 'enhancements' && (
+            <div className="p-4">
+              <h3 className="text-sm font-bold mb-3 text-indigo-300">Enhancement Lab</h3>
+              <div className="space-y-3 text-xs">
+                <div className="bg-gray-800 p-2 rounded">
+                  <div className="font-bold mb-1">1. Dataset Playground</div>
+                  <select
+                    value={datasetName}
+                    onChange={(e) => setDatasetName(e.target.value)}
+                    className="w-full bg-gray-700 text-white text-xs p-1 rounded mb-1"
+                  >
+                    {Object.keys(DATASET_PRESETS).map((name) => (
+                      <option key={name} value={name}>{name}</option>
+                    ))}
+                  </select>
+                  <div className="text-gray-300">{activeDataset.summary}</div>
+                </div>
+
+                <div className="bg-gray-800 p-2 rounded">
+                  <div className="font-bold mb-1">2. Scenario Presets</div>
+                  <div className="grid grid-cols-2 gap-1">
+                    {Object.entries(SCENARIO_PRESETS).map(([key, scenario]) => (
+                      <button
+                        key={key}
+                        onClick={() => applyScenarioPreset(key)}
+                        className={`px-2 py-1 rounded text-xs ${selectedScenario === key ? 'bg-indigo-600' : 'bg-gray-600 hover:bg-gray-700'}`}
+                      >
+                        {scenario.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="bg-gray-800 p-2 rounded">
+                  <div className="font-bold mb-1">3. Side-by-Side Comparison</div>
+                  <div className="flex gap-1 items-center mb-1">
+                    <select
+                      value={compareModel}
+                      onChange={(e) => setCompareModel(e.target.value)}
+                      className="w-full bg-gray-700 text-white text-xs p-1 rounded"
+                    >
+                      {Object.keys(MODEL_PRESETS).map((name) => (
+                        <option key={name} value={name}>{name}</option>
+                      ))}
+                    </select>
+                    <button onClick={runModelComparison} className="bg-indigo-700 hover:bg-indigo-800 px-2 py-1 rounded">Run</button>
+                  </div>
+                  {compareSnapshot && (
+                    <div className="text-gray-300">
+                      <div>{compareSnapshot.baselineModel}: {(compareSnapshot.baselineAccuracy * 100).toFixed(1)}%</div>
+                      <div>{compareSnapshot.compareModel}: {(compareSnapshot.compareAccuracy * 100).toFixed(1)}%</div>
+                      <div className={compareSnapshot.delta >= 0 ? 'text-green-300' : 'text-red-300'}>
+                        Δ {(compareSnapshot.delta * 100).toFixed(1)}%
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="bg-gray-800 p-2 rounded">
+                  <div className="font-bold mb-1">4. Why This Happened</div>
+                  <div className="space-y-1">
+                    {explainerCards.map((card, idx) => (
+                      <div key={`explain-${idx}`} className="text-gray-300">{card}</div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="bg-gray-800 p-2 rounded">
+                  <div className="font-bold mb-1">5. Interactive Prediction</div>
+                  <div className="grid grid-cols-3 gap-1 mb-1">
+                    {['x1', 'x2', 'x3'].map((key) => (
+                      <input
+                        key={key}
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.01"
+                        value={predictionInput[key]}
+                        onChange={(e) => setPredictionInput((prev) => ({ ...prev, [key]: parseFloat(e.target.value) }))}
+                      />
+                    ))}
+                  </div>
+                  {activeDataset.classes.map((name, idx) => (
+                    <div key={name} className="mb-1">
+                      <div className="flex justify-between"><span>{name}</span><span>{(predictionProbs[idx] * 100).toFixed(1)}%</span></div>
+                      <div className="bg-gray-700 rounded">
+                        <div className="bg-blue-600 h-1 rounded" style={{ width: `${predictionProbs[idx] * 100}%` }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="bg-gray-800 p-2 rounded">
+                  <div className="font-bold mb-1">6. Layer Probe Mode</div>
+                  <div className="flex gap-1 mb-1 overflow-y-auto">
+                    {architecture.map((layer, idx) => (
+                      <button
+                        key={`probe-${idx}`}
+                        onClick={() => setProbeLayerIndex(idx)}
+                        className={`px-2 py-1 rounded text-xs ${layerProbe.index === idx ? 'bg-blue-600' : 'bg-gray-600 hover:bg-gray-700'}`}
+                      >
+                        L{idx + 1}
+                      </button>
+                    ))}
+                  </div>
+                  <div>{layerProbe.name} • {layerProbe.neurons} neurons</div>
+                  <div>Utilization {(layerProbe.utilization * 100).toFixed(1)}% • Saturation {(layerProbe.saturation * 100).toFixed(1)}%</div>
+                </div>
+
+                <div className="bg-gray-800 p-2 rounded">
+                  <div className="font-bold mb-1">7. Training Timeline Replay</div>
+                  {trainingHistory.length > 0 ? (
+                    <>
+                      <input
+                        aria-label="Timeline replay slider"
+                        type="range"
+                        min="0"
+                        max={trainingHistory.length - 1}
+                        step="1"
+                        value={timelineIndex >= 0 ? timelineIndex : trainingHistory.length - 1}
+                        onChange={(e) => setTimelineIndex(parseInt(e.target.value, 10))}
+                        className="w-full"
+                      />
+                      {timelinePoint && (
+                        <div>
+                          <div>Epoch {timelinePoint.epoch} • Batch {timelinePoint.batch}</div>
+                          <div>Loss {timelinePoint.loss.toFixed(4)} • Acc {(timelinePoint.accuracy * 100).toFixed(1)}%</div>
+                        </div>
+                      )}
+                    </>
+                  ) : <div className="text-gray-300">No training timeline yet.</div>}
+                </div>
+
+                <div className="bg-gray-800 p-2 rounded">
+                  <div className="font-bold mb-1">8. Missions</div>
+                  {missionStatus.map((mission) => (
+                    <div key={mission.name} className={mission.complete ? 'text-green-300' : 'text-gray-300'}>
+                      {mission.complete ? '✓' : '•'} {mission.name}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="bg-gray-800 p-2 rounded">
+                  <div className="font-bold mb-1">9. Architecture Assistant</div>
+                  <div className="flex gap-1 mb-1">
+                    <select
+                      value={assistantGoal}
+                      onChange={(e) => setAssistantGoal(e.target.value)}
+                      className="w-full bg-gray-700 text-white text-xs p-1 rounded"
+                    >
+                      {ASSISTANT_GOALS.map((goal) => <option key={goal} value={goal}>{goal}</option>)}
+                    </select>
+                    <button onClick={runArchitectureAssistant} className="bg-indigo-700 hover:bg-indigo-800 px-2 py-1 rounded">Apply</button>
+                  </div>
+                  {assistantMessage && <div className="text-gray-300">{assistantMessage}</div>}
+                </div>
+
+                <div className="bg-gray-800 p-2 rounded">
+                  <div className="font-bold mb-1">10. Experiment Tracker</div>
+                  <div className="flex gap-1 mb-1">
+                    <input
+                      placeholder="Run note"
+                      value={experimentNote}
+                      onChange={(e) => setExperimentNote(e.target.value)}
+                      className="w-full bg-gray-700 text-white text-xs p-1 rounded"
+                    />
+                    <button onClick={saveExperiment} className="bg-blue-700 hover:bg-blue-800 px-2 py-1 rounded">Save</button>
+                  </div>
+                  <div className="max-h-24 overflow-y-auto">
+                    {experimentRuns.slice(0, 6).map((run) => (
+                      <div key={run.id} className="text-gray-300 mb-1">
+                        {run.model} • {run.dataset} • {(run.accuracy * 100).toFixed(1)}% • {run.note}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="bg-gray-800 p-2 rounded">
+                  <div className="font-bold mb-1">11. Shareable Story Links</div>
+                  <div className="flex gap-1 mb-1">
+                    <button onClick={addStoryStep} className="bg-gray-600 hover:bg-gray-700 px-2 py-1 rounded">Add Step</button>
+                    <button onClick={createStoryShareLink} className="bg-indigo-700 hover:bg-indigo-800 px-2 py-1 rounded">Create Link</button>
+                  </div>
+                  {storySteps.map((step, idx) => <div key={`story-step-${idx}`} className="text-gray-300">{step}</div>)}
+                  {storyLink && <div className="text-cyan-300 mt-1 break-all">{storyLink}</div>}
+                </div>
+
+                <div className="bg-gray-800 p-2 rounded">
+                  <div className="font-bold mb-1">12. Confusion Matrix + Class Metrics</div>
+                  <div className="grid grid-cols-3 gap-1 mb-1">
+                    {confusionMatrix.flatMap((row, rIdx) =>
+                      row.map((value, cIdx) => (
+                        <div key={`cm-${rIdx}-${cIdx}`} className="bg-gray-700 p-1 text-center rounded">
+                          {(value * 100).toFixed(0)}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                  {classMetrics.map((metric) => (
+                    <div key={metric.name} className="text-gray-300">
+                      {metric.name}: P {(metric.precision * 100).toFixed(0)} / R {(metric.recall * 100).toFixed(0)} / F1 {(metric.f1 * 100).toFixed(0)}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="bg-gray-800 p-2 rounded">
+                  <div className="font-bold mb-1">13. Failure Case Gallery</div>
+                  {activeDataset.failureCases.map((failure) => (
+                    <div key={failure} className="text-red-300">• {failure}</div>
+                  ))}
+                </div>
+
+                <div className="bg-gray-800 p-2 rounded">
+                  <div className="font-bold mb-1">14. Presentation Mode</div>
+                  <button
+                    onClick={() => setPresentationMode((prev) => !prev)}
+                    className="bg-blue-700 hover:bg-blue-800 px-2 py-1 rounded"
+                  >
+                    {presentationMode ? 'Disable Presentation Mode' : 'Enable Presentation Mode'}
+                  </button>
+                </div>
+
+                <div className="bg-gray-800 p-2 rounded">
+                  <div className="font-bold mb-1">15. Collaboration Mode</div>
+                  <div className="flex gap-1 mb-1">
+                    <button
+                      onClick={() => setCollabMode((prev) => !prev)}
+                      className={`px-2 py-1 rounded ${collabMode ? 'bg-green-700' : 'bg-gray-600 hover:bg-gray-700'}`}
+                    >
+                      {collabMode ? 'Collab On' : 'Collab Off'}
+                    </button>
+                    <input
+                      placeholder="Add annotation"
+                      value={annotationDraft}
+                      onChange={(e) => setAnnotationDraft(e.target.value)}
+                      className="w-full bg-gray-700 text-white text-xs p-1 rounded"
+                    />
+                    <button onClick={addAnnotation} className="bg-indigo-700 hover:bg-indigo-800 px-2 py-1 rounded">Post</button>
+                  </div>
+                  <div className="max-h-24 overflow-y-auto">
+                    {annotations.slice(0, 8).map((note) => (
+                      <div key={note.id} className="text-gray-300 mb-1">
+                        {note.model}: {note.text}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
