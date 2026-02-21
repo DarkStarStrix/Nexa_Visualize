@@ -20,6 +20,7 @@ const SHARED_PREFIX = 'nexa.visualize.session.shared.';
 const EXPERIMENT_RUNS_KEY = 'nexa.visualize.experiment.runs';
 const STORY_KEY = 'nexa.visualize.story.';
 const COLLAB_ANNOTATIONS_KEY = 'nexa.visualize.collab.annotations';
+const THEME_KEY = 'nexa.visualize.theme';
 
 const MODEL_PRESETS = {
   Custom: DEFAULT_ARCHITECTURE,
@@ -91,6 +92,8 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
   const animationRef = useRef(null);
   const neuronsRef = useRef([]);
   const connectionsRef = useRef([]);
+  const decorationsRef = useRef([]);
+  const sceneManagerRef = useRef(null);
   const animationProgressRef = useRef(0);
   const optimizationBallRef = useRef(null);
   const cameraDistanceRef = useRef(DEFAULT_CAMERA_STATE.distance);
@@ -106,6 +109,7 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
   const trainingRngRef = useRef(createSeededRng(DEFAULT_SESSION_STATE.simulation.seed));
   const batchRef = useRef(0);
   const epochRef = useRef(0);
+  const isCameraDirtyRef = useRef(false);
 
   const [isTraining, setIsTraining] = useState(false);
   const [epoch, setEpoch] = useState(0);
@@ -137,6 +141,13 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
   const [annotations, setAnnotations] = useState([]);
   const [presentationMode, setPresentationMode] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
+  const [theme, setTheme] = useState(() => {
+    try {
+      return localStorage.getItem(THEME_KEY) || 'dark';
+    } catch {
+      return 'dark';
+    }
+  });
 
   // Architecture customization
   const [architecture, setArchitecture] = useState(DEFAULT_ARCHITECTURE);
@@ -211,6 +222,18 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
   }, [annotations]);
 
   useEffect(() => {
+    try {
+      localStorage.setItem(THEME_KEY, theme);
+    } catch {
+      setStatusMessage('Theme preference could not be persisted.');
+    }
+  }, [theme]);
+
+  useEffect(() => {
+    sceneManagerRef.current?.setTheme?.(theme);
+  }, [theme]);
+
+  useEffect(() => {
     setProbeLayerIndex((prev) => Math.max(0, Math.min(prev, architecture.length - 1)));
   }, [architecture.length]);
 
@@ -256,9 +279,14 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
     const scene = sceneRef.current;
     if (!scene) return;
 
-    clearNetwork({ scene, neurons: neuronsRef.current, connections: connectionsRef.current });
+    clearNetwork({
+      scene,
+      neurons: neuronsRef.current,
+      connections: connectionsRef.current,
+      decorations: decorationsRef.current
+    });
     const seededNetworkRng = createSeededRng(simulationSeed + layers.length * 131);
-    const { neurons, connections } = buildDenseNetwork({
+    const { neurons, connections, decorations } = buildDenseNetwork({
       scene,
       layers,
       random: seededNetworkRng,
@@ -267,6 +295,7 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
 
     neuronsRef.current = neurons;
     connectionsRef.current = connections;
+    decorationsRef.current = decorations || [];
 
     const optimalDistance = calculateOptimalCameraDistance(layers, selectedModel);
     setCameraState(prev => ({
@@ -342,6 +371,7 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
     if (!mountRef.current) return;
     const mountNode = mountRef.current;
     const sceneManager = createSceneManager(mountNode);
+    sceneManagerRef.current = sceneManager;
     const { scene, camera, renderer } = sceneManager;
     sceneRef.current = scene;
     cameraRef.current = camera;
@@ -364,36 +394,38 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
       if (isDragging && cameraModeRef.current === 'manual') {
         const deltaX = (event.clientX - previousMousePosition.x) * 0.008;
         const deltaY = (event.clientY - previousMousePosition.y) * 0.008;
-
-        setCameraState(prev => {
-          const next = {
-            ...prev,
-            targetAngleX: prev.targetAngleX + deltaX,
-            targetAngleY: Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, prev.targetAngleY + deltaY))
-          };
-          cameraStateRef.current = next;
-          return next;
-        });
+        const prev = cameraStateRef.current;
+        const next = {
+          ...prev,
+          targetAngleX: prev.targetAngleX + deltaX,
+          targetAngleY: Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, prev.targetAngleY + deltaY))
+        };
+        cameraStateRef.current = next;
+        isCameraDirtyRef.current = true;
 
         previousMousePosition = { x: event.clientX, y: event.clientY };
       }
     };
 
     const onMouseUp = () => {
+      if (isCameraDirtyRef.current) {
+        setCameraState(cameraStateRef.current);
+        isCameraDirtyRef.current = false;
+      }
       isDragging = false;
     };
 
     const onWheel = (event) => {
       if (cameraModeRef.current === 'manual') {
         event.preventDefault();
-        setCameraState(prev => {
-          const next = {
-            ...prev,
-            targetDistance: Math.max(5, Math.min(80, prev.targetDistance + event.deltaY * 0.05))
-          };
-          cameraStateRef.current = next;
-          return next;
-        });
+        const prev = cameraStateRef.current;
+        const next = {
+          ...prev,
+          targetDistance: Math.max(5, Math.min(80, prev.targetDistance + event.deltaY * 0.05))
+        };
+        cameraStateRef.current = next;
+        setCameraState(next);
+        isCameraDirtyRef.current = true;
       }
     };
 
@@ -562,9 +594,15 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
       window.removeEventListener('resize', handleResize);
 
       // Cleanup
-      clearNetwork({ scene, neurons: neuronsRef.current, connections: connectionsRef.current });
+      clearNetwork({
+        scene,
+        neurons: neuronsRef.current,
+        connections: connectionsRef.current,
+        decorations: decorationsRef.current
+      });
 
       sceneManager.dispose();
+      sceneManagerRef.current = null;
     };
   }, []);
 
@@ -1051,12 +1089,14 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
     applySession(sharedPayload);
   }, [sessionId, applySession]);
 
+  const isLightTheme = theme === 'light';
+
   return (
-    <div className="w-full h-screen bg-gray-900 relative overflow-hidden">
+    <div className={`w-full h-screen relative overflow-hidden ${isLightTheme ? 'theme-light bg-slate-100 text-slate-900' : 'bg-gray-900 text-white'}`}>
       <div ref={mountRef} data-testid="three-canvas-mount" className="w-full h-full" />
 
       {/* Header */}
-      <div className="absolute top-4 left-4 z-20 bg-black bg-opacity-90 text-white p-3 rounded-lg backdrop-blur-sm">
+      <div className={`absolute top-4 left-4 z-20 p-3 rounded-lg backdrop-blur-sm ${isLightTheme ? 'bg-white/95 text-slate-900 border border-slate-200 shadow-lg' : 'bg-black bg-opacity-90 text-white'}`}>
         <div className="flex items-center justify-between mb-2">
           <h2 className="text-lg font-bold text-cyan-400">Nexa Visualize</h2>
           <div className={`text-xs px-2 py-1 rounded font-bold ${
@@ -1076,7 +1116,7 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
 
       {/* Controls */}
       {!presentationMode && (
-      <div className="absolute top-4 right-4 z-20 bg-black bg-opacity-90 text-white rounded-lg backdrop-blur-sm">
+      <div className={`absolute top-4 right-4 z-20 rounded-lg backdrop-blur-sm ${isLightTheme ? 'bg-white/95 text-slate-900 border border-slate-200 shadow-lg' : 'bg-black bg-opacity-90 text-white'}`}>
         <div className="flex">
           <button
             onClick={() => togglePanel('architecture')}
@@ -1151,6 +1191,12 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
               className="bg-gray-600 hover:bg-gray-700 text-white px-2 py-1 rounded text-xs font-medium"
             >
               {presentationMode ? 'Exit Present' : 'Present'}
+            </button>
+            <button
+              onClick={() => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))}
+              className="bg-gray-600 hover:bg-gray-700 text-white px-2 py-1 rounded text-xs font-medium"
+            >
+              {isLightTheme ? 'Dark' : 'Light'}
             </button>
           </div>
 
@@ -1240,7 +1286,7 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
       )}
 
       {/* Training Status */}
-      <div className="absolute bottom-4 left-4 right-4 z-20 bg-black bg-opacity-90 text-white p-3 rounded-lg backdrop-blur-sm">
+      <div className={`absolute bottom-4 left-4 right-4 z-20 p-3 rounded-lg backdrop-blur-sm ${isLightTheme ? 'bg-white/95 text-slate-900 border border-slate-200 shadow-lg' : 'bg-black bg-opacity-90 text-white'}`}>
         <div className="grid grid-cols-4 gap-4 text-center">
           <div>
             <div className="text-xs text-gray-400">Epoch</div>
@@ -1269,7 +1315,7 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
       {activePanel && !presentationMode && (
         <div
           data-testid="config-panel"
-          className="absolute top-24 right-4 z-20 bg-black bg-opacity-95 text-white rounded-lg backdrop-blur-sm max-w-sm max-h-96 overflow-y-auto"
+          className={`absolute top-24 right-4 z-20 rounded-lg backdrop-blur-sm max-w-sm max-h-96 overflow-y-auto ${isLightTheme ? 'bg-white/95 text-slate-900 border border-slate-200 shadow-lg' : 'bg-black bg-opacity-95 text-white'}`}
         >
           {activePanel === 'architecture' && (
             <div className="p-4">

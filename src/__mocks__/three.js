@@ -15,7 +15,7 @@ class MockObject3D {
       clone: () => ({ ...this.position, clone: this.position.clone })
     };
     this.rotation = { x: 0, y: 0, z: 0 };
-    this.scale = { setScalar: jest.fn() };
+    this.scale = { setScalar: jest.fn(), set: jest.fn() };
     this.userData = {};
     this.name = '';
   }
@@ -59,6 +59,8 @@ class AmbientLight extends MockObject3D {}
 class DirectionalLight extends MockObject3D {
   constructor() {
     super();
+    this.color = { setHex: jest.fn() };
+    this.intensity = 1;
     this.shadow = { mapSize: { width: 0, height: 0 } };
   }
 }
@@ -96,6 +98,13 @@ class Material {
 }
 class MeshPhongMaterial extends Material {}
 class LineBasicMaterial extends Material {}
+class SpriteMaterial extends Material {}
+class CanvasTexture {
+  constructor() {
+    this.dispose = jest.fn();
+    this.needsUpdate = false;
+  }
+}
 
 class Mesh extends MockObject3D {
   constructor(geometry, material) {
@@ -105,10 +114,21 @@ class Mesh extends MockObject3D {
   }
 }
 class Line extends Mesh {}
+class Sprite extends Mesh {
+  constructor(material) {
+    super(null, material);
+  }
+}
 
-class GridHelper extends MockObject3D {}
+class GridHelper extends MockObject3D {
+  constructor() {
+    super();
+    this.material = { color: { setHex: jest.fn() } };
+  }
+}
 class Color {
   constructor(hex) { this.hex = hex; }
+  setHex(hex) { this.hex = hex; }
 }
 const MathUtils = { lerp: (a, b, t) => a + (b - a) * t };
 const PCFSoftShadowMap = 'PCFSoftShadowMap';
@@ -124,7 +144,10 @@ module.exports = {
   CylinderGeometry,
   ConeGeometry,
   MeshPhongMaterial,
+  SpriteMaterial,
   Mesh,
+  Sprite,
+  CanvasTexture,
   BufferGeometry,
   LineBasicMaterial,
   Line,

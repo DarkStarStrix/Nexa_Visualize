@@ -60,6 +60,73 @@ const LEGACY_MODELS = new Set(['CNN', 'Transformer', 'MoE', 'GAN', 'RNN', 'LSTM'
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
+const disposeMaterial = (material) => {
+  if (!material) return;
+  if (Array.isArray(material)) {
+    material.forEach(disposeMaterial);
+    return;
+  }
+  material.map?.dispose?.();
+  material.dispose?.();
+};
+
+const createLabelSprite = (text, color = '#f8fafc') => {
+  if (!text || typeof document === 'undefined') return null;
+  if (typeof navigator !== 'undefined' && /jsdom/i.test(navigator.userAgent || '')) return null;
+  const canvas = document.createElement('canvas');
+  let context;
+  try {
+    context = canvas.getContext('2d');
+  } catch {
+    context = null;
+  }
+  if (!context) return null;
+
+  const fontSize = 32;
+  const padding = 16;
+  context.font = `600 ${fontSize}px sans-serif`;
+  const width = Math.ceil(context.measureText(text).width + padding * 2);
+  const height = fontSize + padding * 2;
+  canvas.width = width;
+  canvas.height = height;
+
+  context.font = `600 ${fontSize}px sans-serif`;
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.fillStyle = 'rgba(3, 7, 18, 0.72)';
+  context.fillRect(0, 0, width, height);
+  context.strokeStyle = 'rgba(255, 255, 255, 0.24)';
+  context.lineWidth = 2;
+  context.strokeRect(1, 1, width - 2, height - 2);
+  context.fillStyle = color;
+  context.fillText(text, width / 2, height / 2);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+  const material = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthWrite: false
+  });
+  const sprite = new THREE.Sprite(material);
+  const aspect = width / Math.max(1, height);
+  sprite.scale.set(3.2 * aspect, 3.2, 1);
+  sprite.userData = {
+    isLabel: true
+  };
+  return sprite;
+};
+
+const getGeometryHeight = (geometry) => {
+  if (!geometry || !geometry.parameters) return 1.2;
+  const params = geometry.parameters;
+  if (Number.isFinite(params.height)) return params.height;
+  if (Number.isFinite(params.radius)) return params.radius * 2;
+  if (Number.isFinite(params.radiusTop)) return Math.max(params.radiusTop, params.radiusBottom || 0) * 2;
+  if (Number.isFinite(params.depth)) return params.depth;
+  return 1.2;
+};
+
 export const calculateOptimalCameraDistance = (layers, selectedModel = 'Custom') => {
   if (LEGACY_CAMERA_DISTANCE[selectedModel]) {
     return LEGACY_CAMERA_DISTANCE[selectedModel];
@@ -75,7 +142,7 @@ export const calculateOptimalCameraDistance = (layers, selectedModel = 'Custom')
   return Math.max(12, maxDimension * scale);
 };
 
-export const clearNetwork = ({ scene, neurons = [], connections = [] }) => {
+export const clearNetwork = ({ scene, neurons = [], connections = [], decorations = [] }) => {
   if (!scene) return;
 
   neurons.forEach((layer) => {
@@ -89,7 +156,13 @@ export const clearNetwork = ({ scene, neurons = [], connections = [] }) => {
   connections.forEach((conn) => {
     scene.remove(conn);
     conn.geometry?.dispose();
-    conn.material?.dispose();
+    disposeMaterial(conn.material);
+  });
+
+  decorations.forEach((item) => {
+    scene.remove(item);
+    item.geometry?.dispose?.();
+    disposeMaterial(item.material);
   });
 };
 
@@ -188,6 +261,7 @@ const shouldConnectDense = ({
 const createLegacyContext = ({ scene, connectionBudget }) => {
   const neurons = [];
   const connections = [];
+  const decorations = [];
 
   const addStage = (nodeSpecs) => {
     const layerIndex = neurons.length;
@@ -198,7 +272,8 @@ const createLegacyContext = ({ scene, connectionBudget }) => {
         opacity: spec.opacity ?? 0.85,
         shininess: 70
       });
-      const mesh = new THREE.Mesh(spec.geometry(), material);
+      const geometry = spec.geometry();
+      const mesh = new THREE.Mesh(geometry, material);
       mesh.position.set(spec.x, spec.y, spec.z);
       mesh.userData = {
         originalColor: spec.color,
@@ -209,6 +284,14 @@ const createLegacyContext = ({ scene, connectionBudget }) => {
         legacyType: spec.type || ''
       };
       scene.add(mesh);
+      if (spec.name) {
+        const label = createLabelSprite(spec.name, spec.labelColor || '#f8fafc');
+        if (label) {
+          label.position.set(spec.x, spec.y + getGeometryHeight(geometry) * 0.6 + 1.15, spec.z);
+          scene.add(label);
+          decorations.push(label);
+        }
+      }
       return mesh;
     });
     neurons.push(layerNodes);
@@ -249,12 +332,14 @@ const createLegacyContext = ({ scene, connectionBudget }) => {
   return {
     neurons,
     connections,
+    decorations,
     addStage,
     connect,
     connectAll,
     finalize: () => ({
       neurons,
       connections,
+      decorations,
       stats: {
         neuronCount: neurons.reduce((sum, layer) => sum + layer.length, 0),
         connectionCount: connections.length,
@@ -608,6 +693,7 @@ const buildDenseFallbackNetwork = ({ scene, layers, random, selectedModel, conne
 
   const neurons = [];
   const connections = [];
+  const decorations = [];
   const neuronGeometry = new THREE.SphereGeometry(NEURON_SIZE, 8, 6);
 
   const addConnection = (fromNode, toNode, fromLayerIndex, toLayerIndex, fromIndex, toIndex, opacity = 0.15) => {
@@ -663,6 +749,15 @@ const buildDenseFallbackNetwork = ({ scene, layers, random, selectedModel, conne
     }
 
     neurons.push(layerNodes);
+    if (layerNodes.length > 0 && layer.name) {
+      const topY = Math.max(...layerNodes.map((node) => node.position.y));
+      const label = createLabelSprite(layer.name, '#cbd5e1');
+      if (label) {
+        label.position.set(layerX, topY + 1.1, 0);
+        scene.add(label);
+        decorations.push(label);
+      }
+    }
   });
 
   for (let layerIndex = 0; layerIndex < layers.length - 1; layerIndex += 1) {
@@ -712,6 +807,7 @@ const buildDenseFallbackNetwork = ({ scene, layers, random, selectedModel, conne
   return {
     neurons,
     connections,
+    decorations,
     stats: {
       neuronCount: neurons.reduce((sum, layer) => sum + layer.length, 0),
       connectionCount: connections.length,
