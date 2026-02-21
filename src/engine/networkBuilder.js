@@ -528,28 +528,70 @@ const buildLegacyMoeNetwork = ({ scene, layers, connectionBudget }) => {
   const ctx = createLegacyContext({ scene, connectionBudget });
   const expertsLayer = (layers || []).find((layer) => (layer?.name || '').toLowerCase().includes('expert'));
   const expertCount = clamp(Math.round(expertsLayer?.neurons || 4), 2, 8);
+  const expertPalette = [0x60a5fa, 0x34d399, 0xf59e0b, 0xf472b6, 0xa78bfa, 0x22d3ee, 0xfb7185, 0x4ade80];
+  const expertSpacing = 7.5;
+  const totalWidth = (expertCount - 1) * expertSpacing;
+  const startX = -totalWidth / 2;
 
-  const gateStage = ctx.addStage([
-    { name: 'Gating Network', type: 'gate', geometry: () => new THREE.SphereGeometry(1, 16, 12), color: 0xffd700, x: 0, y: 2, z: 0 }
+  const routerFnnStage = ctx.addStage([
+    { name: 'Gating FNN', type: 'moe_router_fnn', geometry: () => new THREE.BoxGeometry(5, 3, 2), color: 0xffd700, x: 0, y: 18, z: 0 }
+  ]);
+  const routerSoftmaxStage = ctx.addStage([
+    { name: 'Softmax', type: 'moe_router_softmax', geometry: () => new THREE.SphereGeometry(1.2, 16, 12), color: 0xfeca57, x: 0, y: 13.5, z: 0 }
   ]);
 
-  const radius = 6;
+  const probabilitySpecs = [];
+  for (let i = 0; i < expertCount; i += 1) {
+    const x = startX + i * expertSpacing;
+    probabilitySpecs.push({
+      type: 'moe_gate_bar',
+      geometry: () => new THREE.BoxGeometry(1.5, 0.25, 0.6),
+      color: 0x22d3ee,
+      x,
+      y: 8,
+      z: 0
+    });
+  }
+  const probabilityStage = ctx.addStage(probabilitySpecs);
+
   const expertSpecs = [];
   for (let i = 0; i < expertCount; i += 1) {
-    const angle = (i / expertCount) * Math.PI * 2;
+    const x = startX + i * expertSpacing;
     expertSpecs.push({
-      name: `Expert ${i + 1}`,
-      type: 'expert',
-      geometry: () => new THREE.CylinderGeometry(0.8, 0.8, 2, 8),
-      color: 0x3b82f6,
-      x: Math.cos(angle) * radius,
-      y: 0,
-      z: Math.sin(angle) * radius
+      name: `E${i + 1}`,
+      type: 'moe_expert',
+      geometry: () => new THREE.BoxGeometry(4, 6, 3),
+      color: expertPalette[i % expertPalette.length],
+      x,
+      y: 2,
+      z: 0
     });
   }
   const expertStage = ctx.addStage(expertSpecs);
 
-  ctx.connectAll({ fromLayer: gateStage, toLayer: expertStage, opacity: 0.22 });
+  const usageSpecs = [];
+  for (let i = 0; i < expertCount; i += 1) {
+    const x = startX + i * expertSpacing;
+    usageSpecs.push({
+      type: 'moe_usage_bar',
+      geometry: () => new THREE.BoxGeometry(2, 0.25, 0.8),
+      color: 0x4ecdc4,
+      x,
+      y: -2.5,
+      z: 0
+    });
+  }
+  const usageStage = ctx.addStage(usageSpecs);
+
+  const combinerStage = ctx.addStage([
+    { name: 'Weighted Sum', type: 'moe_combiner', geometry: () => new THREE.SphereGeometry(2.2, 16, 12), color: 0x22c55e, x: 0, y: -4.2, z: 0 }
+  ]);
+
+  ctx.connect({ fromLayer: routerFnnStage, fromNeuron: 0, toLayer: routerSoftmaxStage, toNeuron: 0, opacity: 0.22 });
+  ctx.connectAll({ fromLayer: routerSoftmaxStage, toLayer: probabilityStage, opacity: 0.18 });
+  ctx.connectAll({ fromLayer: probabilityStage, toLayer: expertStage, opacity: 0.14 });
+  ctx.connectAll({ fromLayer: expertStage, toLayer: usageStage, opacity: 0.18 });
+  ctx.connectAll({ fromLayer: usageStage, toLayer: combinerStage, opacity: 0.22 });
 
   return ctx.finalize();
 };

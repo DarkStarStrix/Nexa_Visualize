@@ -100,7 +100,7 @@ describe('network builder', () => {
     expect(minY).toBeGreaterThan(-8);
   });
 
-  test('restores MoE legacy ring style with central gate and experts only', () => {
+  test('restores MoE top-down pipeline style (router -> experts -> combiner)', () => {
     const scene = new THREE.Scene();
     const layers = [
       { neurons: 10, color: 0xffffff, gridSize: [5, 2, 1], name: 'Token Input' },
@@ -118,10 +118,14 @@ describe('network builder', () => {
       random: () => 0
     });
 
-    expect(neurons).toHaveLength(2);
-    expect(neurons[0][0].userData.legacyType).toBe('gate');
-    expect(neurons[1]).toHaveLength(4);
-    expect(neurons[1].every((node) => node.userData.legacyType === 'expert')).toBe(true);
-    expect(connections.length).toBe(4);
+    expect(neurons).toHaveLength(6);
+    expect(neurons[0][0].userData.legacyType).toBe('moe_router_fnn');
+    expect(neurons[1][0].userData.legacyType).toBe('moe_router_softmax');
+    expect(neurons[2]).toHaveLength(4);
+    expect(neurons[3]).toHaveLength(4);
+    expect(neurons[4]).toHaveLength(4);
+    expect(neurons[5][0].userData.legacyType).toBe('moe_combiner');
+    expect(neurons[3].every((node) => node.userData.legacyType === 'moe_expert')).toBe(true);
+    expect(connections.length).toBeGreaterThan(20);
   });
 });
