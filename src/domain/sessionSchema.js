@@ -1,4 +1,6 @@
-export const SESSION_SCHEMA_VERSION = 2;
+import { DEFAULT_SIMULATION_SEED, sanitizeSeed } from '../engine/random';
+
+export const SESSION_SCHEMA_VERSION = 3;
 
 export const DEFAULT_ARCHITECTURE = [
   { neurons: 4, activation: 'Linear', name: 'Input' },
@@ -33,7 +35,12 @@ export const DEFAULT_SESSION_STATE = {
   selectedModel: 'Custom',
   uiState: {
     activePanel: null,
-    animationSpeed: 1
+    animationSpeed: 1,
+    guidedMode: false,
+    telemetryLevel: 'off'
+  },
+  simulation: {
+    seed: DEFAULT_SIMULATION_SEED
   }
 };
 
@@ -60,6 +67,10 @@ const sanitizeTrainingParams = (params) => {
   return safe;
 };
 
+const sanitizeTelemetryLevel = (telemetryLevel) => {
+  return telemetryLevel === 'basic' ? 'basic' : 'off';
+};
+
 const sanitizeCameraState = (cameraState) => {
   const safe = { ...DEFAULT_CAMERA_STATE, ...(cameraState || {}) };
   Object.keys(DEFAULT_CAMERA_STATE).forEach((key) => {
@@ -80,6 +91,19 @@ const migrateV1ToV2 = (session) => ({
   }
 });
 
+const migrateV2ToV3 = (session) => ({
+  ...session,
+  version: 3,
+  uiState: {
+    ...session.uiState,
+    guidedMode: Boolean(session.uiState?.guidedMode),
+    telemetryLevel: sanitizeTelemetryLevel(session.uiState?.telemetryLevel)
+  },
+  simulation: {
+    seed: sanitizeSeed(session.simulation?.seed)
+  }
+});
+
 export const migrateSession = (session) => {
   if (!session || typeof session !== 'object') {
     return DEFAULT_SESSION_STATE;
@@ -90,6 +114,9 @@ export const migrateSession = (session) => {
 
   if (version < 2) {
     migrated = migrateV1ToV2(migrated);
+  }
+  if (version < 3) {
+    migrated = migrateV2ToV3(migrated);
   }
 
   return {
@@ -103,7 +130,12 @@ export const migrateSession = (session) => {
       activePanel: typeof migrated.uiState?.activePanel === 'string' ? migrated.uiState.activePanel : null,
       animationSpeed: Number.isFinite(migrated.uiState?.animationSpeed)
         ? migrated.uiState.animationSpeed
-        : 1
+        : 1,
+      guidedMode: Boolean(migrated.uiState?.guidedMode),
+      telemetryLevel: sanitizeTelemetryLevel(migrated.uiState?.telemetryLevel)
+    },
+    simulation: {
+      seed: sanitizeSeed(migrated.simulation?.seed)
     }
   };
 };

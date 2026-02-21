@@ -9,6 +9,11 @@ import {
   parseSessionPayload,
   serializeSession
 } from './domain/sessionSchema';
+import { buildDenseNetwork, calculateOptimalCameraDistance, clearNetwork } from './engine/networkBuilder';
+import { createSeededRng, sanitizeSeed } from './engine/random';
+import { computeTrainingTick, GUIDED_PHASE_COPY, getTrainingPhase, TRAINING_PHASE } from './engine/trainingSimulation';
+import { createSceneManager } from './engine/sceneManager';
+import { getProgressPercent, getTelemetryLabel, getTrainingBadge } from './selectors/trainingSelectors';
 
 const LOCAL_DRAFT_KEY = 'nexa.visualize.session.draft';
 const SHARED_PREFIX = 'nexa.visualize.session.shared.';
@@ -66,6 +71,22 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
   const optimizationBallRef = useRef(null);
   const cameraDistanceRef = useRef(DEFAULT_CAMERA_STATE.distance);
   const lossRef = useRef(1.0);
+  const accuracyRef = useRef(0.1);
+  const layersLengthRef = useRef(DEFAULT_ARCHITECTURE.length);
+  const createNetworkRef = useRef(null);
+  const cameraModeRef = useRef(DEFAULT_SESSION_STATE.cameraMode);
+  const isTrainingRef = useRef(false);
+  const isTrainingCompleteRef = useRef(false);
+  const animationSpeedRef = useRef(DEFAULT_SESSION_STATE.uiState.animationSpeed);
+  const telemetryLevelRef = useRef(DEFAULT_SESSION_STATE.uiState.telemetryLevel);
+  const reducedMotionRef = useRef(false);
+  const cameraStateRef = useRef(DEFAULT_CAMERA_STATE);
+  const trainingRngRef = useRef(createSeededRng(DEFAULT_SESSION_STATE.simulation.seed));
+  const lastPerfSampleRef = useRef({ time: 0, frames: 0 });
+  const lastTimelineSampleRef = useRef(0);
+  const phaseUiRef = useRef({ phase: TRAINING_PHASE.IDLE, time: 0 });
+  const timelinePreviewRef = useRef(false);
+  const timelinePreviewTimeoutRef = useRef(null);
 
   const [isTraining, setIsTraining] = useState(false);
   const [epoch, setEpoch] = useState(0);
@@ -76,7 +97,14 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
   const [activePanel, setActivePanel] = useState(DEFAULT_SESSION_STATE.uiState.activePanel);
   const [cameraMode, setCameraMode] = useState(DEFAULT_SESSION_STATE.cameraMode);
   const [animationSpeed, setAnimationSpeed] = useState(DEFAULT_SESSION_STATE.uiState.animationSpeed);
+  const [guidedMode, setGuidedMode] = useState(DEFAULT_SESSION_STATE.uiState.guidedMode);
+  const [telemetryLevel, setTelemetryLevel] = useState(DEFAULT_SESSION_STATE.uiState.telemetryLevel);
+  const [simulationSeed, setSimulationSeed] = useState(DEFAULT_SESSION_STATE.simulation.seed);
   const [selectedModel, setSelectedModel] = useState(DEFAULT_SESSION_STATE.selectedModel);
+  const [trainingPhase, setTrainingPhase] = useState(TRAINING_PHASE.IDLE);
+  const [telemetry, setTelemetry] = useState({ fps: 0, neuronCount: 0, connectionCount: 0 });
+  const [timelineProgress, setTimelineProgress] = useState(0);
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
 
   // Architecture customization
@@ -95,6 +123,57 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
   useEffect(() => {
     lossRef.current = loss;
   }, [loss]);
+
+  useEffect(() => {
+    accuracyRef.current = accuracy;
+  }, [accuracy]);
+
+  useEffect(() => {
+    cameraModeRef.current = cameraMode;
+  }, [cameraMode]);
+
+  useEffect(() => {
+    isTrainingRef.current = isTraining;
+  }, [isTraining]);
+
+  useEffect(() => {
+    isTrainingCompleteRef.current = isTrainingComplete;
+  }, [isTrainingComplete]);
+
+  useEffect(() => {
+    animationSpeedRef.current = animationSpeed;
+  }, [animationSpeed]);
+
+  useEffect(() => {
+    telemetryLevelRef.current = telemetryLevel;
+  }, [telemetryLevel]);
+
+  useEffect(() => {
+    reducedMotionRef.current = prefersReducedMotion;
+  }, [prefersReducedMotion]);
+
+  useEffect(() => {
+    cameraStateRef.current = cameraState;
+  }, [cameraState]);
+
+  useEffect(() => {
+    trainingRngRef.current = createSeededRng(simulationSeed);
+  }, [simulationSeed]);
+
+  useEffect(() => {
+    if (!window.matchMedia) return;
+    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const update = () => setPrefersReducedMotion(mediaQuery.matches);
+    update();
+
+    if (mediaQuery.addEventListener) {
+      mediaQuery.addEventListener('change', update);
+      return () => mediaQuery.removeEventListener('change', update);
+    }
+
+    mediaQuery.addListener(update);
+    return () => mediaQuery.removeListener(update);
+  }, []);
 
   // Generate optimized layer configuration
   const layers = useMemo(() => {
@@ -131,126 +210,35 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
     layersLengthRef.current = layers.length;
   }, [layers.length]);
 
-  // Calculate optimal camera distance based on network size
-  const calculateOptimalDistance = useCallback(() => {
-    const networkWidth = layers.length * 3;
-    const networkHeight = Math.max(...layers.map(layer => layer.gridSize[1])) * 2;
-    const networkDepth = Math.max(...layers.map(layer => layer.gridSize[2])) * 2;
-    const maxDimension = Math.max(networkWidth, networkHeight, networkDepth);
-    return Math.max(12, maxDimension * 1.8);
-  }, [layers]);
-
   // Create dense network connections like in the provided image
   const createNetwork = useCallback(() => {
     const scene = sceneRef.current;
     if (!scene) return;
 
-    // Clear existing network
-    neuronsRef.current.forEach(layer => {
-      layer.forEach(neuron => {
-        scene.remove(neuron);
-        neuron.geometry?.dispose();
-        neuron.material?.dispose();
-      });
+    clearNetwork({ scene, neurons: neuronsRef.current, connections: connectionsRef.current });
+    const seededNetworkRng = createSeededRng(simulationSeed + layers.length * 131);
+    const { neurons, connections, stats } = buildDenseNetwork({
+      scene,
+      layers,
+      random: seededNetworkRng,
+      selectedModel
     });
-    connectionsRef.current.forEach(conn => {
-      scene.remove(conn);
-      conn.geometry?.dispose();
-      conn.material?.dispose();
-    });
-
-    const neurons = [];
-    const connections = [];
-    const layerSpacing = 3.5;
-    const neuronSize = 0.15;
-
-    // Shared geometry for performance
-    const neuronGeometry = new THREE.SphereGeometry(neuronSize, 8, 6);
-
-    layers.forEach((layer, layerIndex) => {
-      const layerNeurons = [];
-      const [gridX, gridY, gridZ] = layer.gridSize;
-      const spacingX = gridX > 1 ? 2.5 / (gridX - 1) : 0;
-      const spacingY = gridY > 1 ? 2.5 / (gridY - 1) : 0;
-      const spacingZ = gridZ > 1 ? 1.5 / (gridZ - 1) : 0;
-
-      let neuronIndex = 0;
-      for (let z = 0; z < gridZ && neuronIndex < layer.neurons; z++) {
-        for (let y = 0; y < gridY && neuronIndex < layer.neurons; y++) {
-          for (let x = 0; x < gridX && neuronIndex < layer.neurons; x++) {
-            const material = new THREE.MeshPhongMaterial({
-              color: layer.color,
-              transparent: true,
-              opacity: 0.8,
-              shininess: 100
-            });
-            const neuron = new THREE.Mesh(neuronGeometry, material);
-
-            neuron.position.set(
-              layerIndex * layerSpacing - (layers.length - 1) * layerSpacing / 2,
-              (y * spacingY) - (gridY - 1) * spacingY / 2,
-              (z * spacingZ) - (gridZ - 1) * spacingZ / 2 + (x * spacingX) - (gridX - 1) * spacingX / 2
-            );
-
-            neuron.userData = {
-              originalColor: layer.color,
-              activation: 0,
-              layerIndex,
-              neuronIndex
-            };
-
-            scene.add(neuron);
-            layerNeurons.push(neuron);
-            neuronIndex++;
-          }
-        }
-      }
-      neurons.push(layerNeurons);
-    });
-
-    // Create DENSE connections like in the reference image
-    for (let layerIndex = 0; layerIndex < layers.length - 1; layerIndex++) {
-      const currentLayer = neurons[layerIndex];
-      const nextLayer = neurons[layerIndex + 1];
-
-      // Connect every neuron to every neuron in next layer for dense connectivity
-      currentLayer.forEach((neuron1, idx1) => {
-        nextLayer.forEach((neuron2, idx2) => {
-          // Skip some connections for very large networks to maintain performance
-          const connectionDensity = Math.min(1.0, 50 / (currentLayer.length * nextLayer.length));
-          if (Math.random() < connectionDensity) {
-            const points = [neuron1.position.clone(), neuron2.position.clone()];
-            const geometry = new THREE.BufferGeometry().setFromPoints(points);
-            const material = new THREE.LineBasicMaterial({
-              color: 0x666666,
-              transparent: true,
-              opacity: 0.15
-            });
-            const line = new THREE.Line(geometry, material);
-            line.userData = {
-              fromLayer: layerIndex,
-              toLayer: layerIndex + 1,
-              fromNeuron: idx1,
-              toNeuron: idx2
-            };
-            scene.add(line);
-            connections.push(line);
-          }
-        });
-      });
-    }
 
     neuronsRef.current = neurons;
     connectionsRef.current = connections;
+    setTelemetry(prev => ({
+      ...prev,
+      neuronCount: stats.neuronCount,
+      connectionCount: stats.connectionCount
+    }));
 
-    // Update camera distance for new network size
-    const optimalDistance = calculateOptimalDistance();
+    const optimalDistance = calculateOptimalCameraDistance(layers);
     setCameraState(prev => ({
       ...prev,
       targetDistance: optimalDistance,
       distance: optimalDistance
     }));
-  }, [layers, calculateOptimalDistance]);
+  }, [layers, selectedModel, simulationSeed]);
 
   useEffect(() => {
     createNetworkRef.current = createNetwork;
@@ -317,52 +305,11 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
   useEffect(() => {
     if (!mountRef.current) return;
     const mountNode = mountRef.current;
-
-    // Scene setup
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0a0a0a);
+    const sceneManager = createSceneManager(mountNode);
+    const { scene, camera, renderer } = sceneManager;
     sceneRef.current = scene;
-
-    // Camera setup
-    const camera = new THREE.PerspectiveCamera(
-      75,
-      mountNode.clientWidth / mountNode.clientHeight,
-      0.1,
-      1000
-    );
     cameraRef.current = camera;
-
-    // Renderer setup
-    const renderer = new THREE.WebGLRenderer({
-      antialias: true,
-      powerPreference: "high-performance"
-    });
-    renderer.setSize(mountNode.clientWidth, mountNode.clientHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    mountNode.appendChild(renderer.domElement);
     rendererRef.current = renderer;
-
-    // Enhanced lighting
-    const ambientLight = new THREE.AmbientLight(0x404040, 0.4);
-    scene.add(ambientLight);
-
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-    directionalLight.position.set(15, 15, 10);
-    directionalLight.castShadow = true;
-    directionalLight.shadow.mapSize.width = 2048;
-    directionalLight.shadow.mapSize.height = 2048;
-    scene.add(directionalLight);
-
-    const fillLight = new THREE.DirectionalLight(0x4444ff, 0.3);
-    fillLight.position.set(-10, 10, -10);
-    scene.add(fillLight);
-
-    // Grid floor
-    const gridHelper = new THREE.GridHelper(40, 40, 0x444444, 0x222222);
-    gridHelper.position.y = -8;
-    scene.add(gridHelper);
 
     createNetworkRef.current?.();
 
@@ -382,11 +329,15 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
         const deltaX = (event.clientX - previousMousePosition.x) * 0.008;
         const deltaY = (event.clientY - previousMousePosition.y) * 0.008;
 
-        setCameraState(prev => ({
-          ...prev,
-          targetAngleX: prev.targetAngleX + deltaX,
-          targetAngleY: Math.max(-Math.PI/2.2, Math.min(Math.PI/2.2, prev.targetAngleY + deltaY))
-        }));
+        setCameraState(prev => {
+          const next = {
+            ...prev,
+            targetAngleX: prev.targetAngleX + deltaX,
+            targetAngleY: Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, prev.targetAngleY + deltaY))
+          };
+          cameraStateRef.current = next;
+          return next;
+        });
 
         previousMousePosition = { x: event.clientX, y: event.clientY };
       }
@@ -399,10 +350,14 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
     const onWheel = (event) => {
       if (cameraModeRef.current === 'manual') {
         event.preventDefault();
-        setCameraState(prev => ({
-          ...prev,
-          targetDistance: Math.max(5, Math.min(80, prev.targetDistance + event.deltaY * 0.05))
-        }));
+        setCameraState(prev => {
+          const next = {
+            ...prev,
+            targetDistance: Math.max(5, Math.min(80, prev.targetDistance + event.deltaY * 0.05))
+          };
+          cameraStateRef.current = next;
+          return next;
+        });
       }
     };
 
@@ -417,37 +372,53 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
 
       // Camera positioning
       if (cameraModeRef.current === 'auto') {
-        const time = deltaTime * 0.3;
+        const orbitSpeed = reducedMotionRef.current ? 0.15 : 0.3;
+        const time = deltaTime * orbitSpeed;
         const distance = cameraDistanceRef.current;
         camera.position.x = Math.cos(time) * distance;
         camera.position.z = Math.sin(time) * distance;
         camera.position.y = distance * 0.4;
         camera.lookAt(0, 0, 0);
       } else {
-        // Smooth manual camera
-        setCameraState(prev => {
-          const lerpFactor = 0.08;
-          const newDistance = THREE.MathUtils.lerp(prev.distance, prev.targetDistance, lerpFactor);
-          const newAngleX = THREE.MathUtils.lerp(prev.angleX, prev.targetAngleX, lerpFactor);
-          const newAngleY = THREE.MathUtils.lerp(prev.angleY, prev.targetAngleY, lerpFactor);
+        // Smooth manual camera using refs to avoid re-rendering every frame.
+        const prev = cameraStateRef.current;
+        const lerpFactor = 0.08;
+        const newDistance = THREE.MathUtils.lerp(prev.distance, prev.targetDistance, lerpFactor);
+        const newAngleX = THREE.MathUtils.lerp(prev.angleX, prev.targetAngleX, lerpFactor);
+        const newAngleY = THREE.MathUtils.lerp(prev.angleY, prev.targetAngleY, lerpFactor);
 
-          camera.position.x = Math.cos(newAngleX) * Math.cos(newAngleY) * newDistance;
-          camera.position.z = Math.sin(newAngleX) * Math.cos(newAngleY) * newDistance;
-          camera.position.y = Math.sin(newAngleY) * newDistance;
-          camera.lookAt(0, 0, 0);
+        camera.position.x = Math.cos(newAngleX) * Math.cos(newAngleY) * newDistance;
+        camera.position.z = Math.sin(newAngleX) * Math.cos(newAngleY) * newDistance;
+        camera.position.y = Math.sin(newAngleY) * newDistance;
+        camera.lookAt(0, 0, 0);
 
-          return { ...prev, distance: newDistance, angleX: newAngleX, angleY: newAngleY };
-        });
+        cameraStateRef.current = {
+          ...prev,
+          distance: newDistance,
+          angleX: newAngleX,
+          angleY: newAngleY
+        };
+        cameraDistanceRef.current = newDistance;
       }
 
       // FIXED TRAINING ANIMATION - RELIABLE AND CONSISTENT
-      if (isTrainingRef.current && !isTrainingCompleteRef.current) {
+      if ((isTrainingRef.current && !isTrainingCompleteRef.current) || timelinePreviewRef.current) {
         const neurons = neuronsRef.current;
         const connections = connectionsRef.current;
 
         // Continuous animation progress
         animationProgressRef.current = (deltaTime * animationSpeedRef.current * 0.5) % (layersLengthRef.current * 2 + 2);
         const progress = animationProgressRef.current;
+        if (currentTime - lastTimelineSampleRef.current > 200) {
+          const cycleLength = layersLengthRef.current * 2 + 2;
+          setTimelineProgress((progress / cycleLength) * 100);
+          lastTimelineSampleRef.current = currentTime;
+        }
+        const phase = getTrainingPhase(progress, layersLengthRef.current);
+        if (phaseUiRef.current.phase !== phase) {
+          phaseUiRef.current = { phase, time: currentTime };
+          setTrainingPhase(phase);
+        }
 
         // Reset all visuals
         neurons.forEach(layer => {
@@ -531,6 +502,10 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
           });
         }
       }
+      else if (!timelinePreviewRef.current && phaseUiRef.current.phase !== TRAINING_PHASE.IDLE) {
+        phaseUiRef.current = { phase: TRAINING_PHASE.IDLE, time: currentTime };
+        setTrainingPhase(TRAINING_PHASE.IDLE);
+      }
 
       // Update optimization ball
       if (optimizationBallRef.current && isTrainingRef.current) {
@@ -541,6 +516,16 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
         ball.position.y = -6 + lossRef.current * 2;
       }
 
+      if (telemetryLevelRef.current === 'basic') {
+        lastPerfSampleRef.current.frames += 1;
+        const elapsed = currentTime - lastPerfSampleRef.current.time;
+        if (elapsed >= 1000) {
+          const fps = Math.round((lastPerfSampleRef.current.frames * 1000) / elapsed);
+          setTelemetry(prev => ({ ...prev, fps }));
+          lastPerfSampleRef.current = { time: currentTime, frames: 0 };
+        }
+      }
+
       renderer.render(scene, camera);
       animationRef.current = requestAnimationFrame(animate);
     };
@@ -548,12 +533,7 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
     animate(0);
 
     // Handle resize
-    const handleResize = () => {
-      if (!mountNode) return;
-      camera.aspect = mountNode.clientWidth / mountNode.clientHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(mountNode.clientWidth, mountNode.clientHeight);
-    };
+    const handleResize = () => sceneManager.resize();
 
     window.addEventListener('resize', handleResize);
 
@@ -562,7 +542,10 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
         cancelAnimationFrame(animationRef.current);
       }
       if (mountNode && renderer.domElement) {
-        mountNode.removeChild(renderer.domElement);
+        if (timelinePreviewTimeoutRef.current) {
+          clearTimeout(timelinePreviewTimeoutRef.current);
+          timelinePreviewTimeoutRef.current = null;
+        }
         mountNode.removeEventListener('mousedown', onMouseDown);
         mountNode.removeEventListener('mousemove', onMouseMove);
         mountNode.removeEventListener('mouseup', onMouseUp);
@@ -571,18 +554,9 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
       window.removeEventListener('resize', handleResize);
 
       // Cleanup
-      neuronsRef.current.forEach(layer => {
-        layer.forEach(neuron => {
-          neuron.geometry?.dispose();
-          neuron.material?.dispose();
-        });
-      });
-      connectionsRef.current.forEach(conn => {
-        conn.geometry?.dispose();
-        conn.material?.dispose();
-      });
+      clearNetwork({ scene, neurons: neuronsRef.current, connections: connectionsRef.current });
 
-      renderer.dispose();
+      sceneManager.dispose();
     };
   }, []);
 
@@ -603,49 +577,48 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
     if (!isTraining || isTrainingComplete) return;
 
     const interval = setInterval(() => {
-      setBatch(prev => prev + 1);
-
-      setLoss(prev => {
-        const decay = 1 - trainingParams.learningRate * 20;
-        const noise = (Math.random() - 0.5) * 0.01;
-        return Math.max(0.001, prev * decay + noise);
-      });
-
-      setAccuracy(prev => {
-        const improvement = (0.9 - prev) * trainingParams.learningRate * 15;
-        const noise = (Math.random() - 0.5) * 0.005;
-        const newAcc = Math.min(0.92, prev + improvement + noise);
-
-        // STOP AT 90% and flash blue
-        if (newAcc >= 0.9 && !isTrainingComplete) {
-          setIsTrainingComplete(true);
-          setIsTraining(false);
-
-          // Blue completion flash
-          setTimeout(() => {
-            neuronsRef.current.forEach(layer => {
-              layer.forEach(neuron => {
-                neuron.material.emissive.setHex(0x0099ff);
-                neuron.material.emissive.multiplyScalar(1);
-              });
-            });
-            connectionsRef.current.forEach(conn => {
-              conn.material.color.setHex(0x0099ff);
-              conn.material.opacity = 0.8;
-            });
-          }, 100);
+      setBatch(prev => {
+        const nextBatch = prev + 1;
+        if (nextBatch % 10 === 0) {
+          setEpoch(current => current + 1);
         }
-
-        return newAcc;
+        return nextBatch;
       });
 
-      if (batch % 10 === 0) {
-        setEpoch(prev => prev + 1);
+      const tick = computeTrainingTick({
+        previousLoss: lossRef.current,
+        previousAccuracy: accuracyRef.current,
+        learningRate: trainingParams.learningRate,
+        random: trainingRngRef.current
+      });
+
+      lossRef.current = tick.loss;
+      accuracyRef.current = tick.accuracy;
+      setLoss(tick.loss);
+      setAccuracy(tick.accuracy);
+
+      // STOP AT 90% and flash blue
+      if (tick.complete && !isTrainingCompleteRef.current) {
+        setIsTrainingComplete(true);
+        setIsTraining(false);
+
+        setTimeout(() => {
+          neuronsRef.current.forEach(layer => {
+            layer.forEach(neuron => {
+              neuron.material.emissive.setHex(0x0099ff);
+              neuron.material.emissive.multiplyScalar(1);
+            });
+          });
+          connectionsRef.current.forEach(conn => {
+            conn.material.color.setHex(0x0099ff);
+            conn.material.opacity = 0.8;
+          });
+        }, 100);
       }
     }, 200 / animationSpeed);
 
   return () => clearInterval(interval);
-  }, [isTraining, isTrainingComplete, trainingParams, batch, animationSpeed]);
+  }, [isTraining, isTrainingComplete, trainingParams.learningRate, animationSpeed]);
 
   // UI Helper functions
   const addLayer = () => {
@@ -679,21 +652,37 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
     setBatch(0);
     setLoss(1.0);
     setAccuracy(0.1);
+    setTrainingPhase(TRAINING_PHASE.IDLE);
+    lossRef.current = 1.0;
+    accuracyRef.current = 0.1;
+    trainingRngRef.current = createSeededRng(simulationSeed);
     setStatusMessage(`${modelName} architecture loaded.`);
-  }, []);
+  }, [simulationSeed]);
 
   const startTraining = () => {
+    timelinePreviewRef.current = false;
+    if (timelinePreviewTimeoutRef.current) {
+      clearTimeout(timelinePreviewTimeoutRef.current);
+      timelinePreviewTimeoutRef.current = null;
+    }
+    trainingRngRef.current = createSeededRng(simulationSeed);
     setIsTraining(true);
     setIsTrainingComplete(false);
     setEpoch(0);
     setBatch(0);
     setLoss(1.0);
     setAccuracy(0.1);
+    setTrainingPhase(TRAINING_PHASE.FORWARD);
+    phaseUiRef.current = { phase: TRAINING_PHASE.FORWARD, time: 0 };
+    lossRef.current = 1.0;
+    accuracyRef.current = 0.1;
     animationProgressRef.current = 0;
   };
 
   const stopTraining = () => {
     setIsTraining(false);
+    setTrainingPhase(TRAINING_PHASE.IDLE);
+    timelinePreviewRef.current = false;
   };
 
   const resetNetwork = () => {
@@ -703,12 +692,39 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
     setBatch(0);
     setLoss(1.0);
     setAccuracy(0.1);
+    setTrainingPhase(TRAINING_PHASE.IDLE);
+    lossRef.current = 1.0;
+    accuracyRef.current = 0.1;
+    trainingRngRef.current = createSeededRng(simulationSeed);
     animationProgressRef.current = 0;
+    setTimelineProgress(0);
+    timelinePreviewRef.current = false;
   };
 
   const togglePanel = (panelName) => {
     setActivePanel((prev) => (prev === panelName ? null : panelName));
   };
+
+  const scrubTimeline = useCallback((nextPercent) => {
+    const safePercent = Math.max(0, Math.min(100, nextPercent));
+    setTimelineProgress(safePercent);
+    const cycleLength = layersLengthRef.current * 2 + 2;
+    const scrubbedProgress = (safePercent / 100) * cycleLength;
+    animationProgressRef.current = scrubbedProgress;
+    const phase = getTrainingPhase(scrubbedProgress, layersLengthRef.current);
+    setTrainingPhase(phase);
+    phaseUiRef.current = { phase, time: performance.now() };
+    timelinePreviewRef.current = true;
+    if (timelinePreviewTimeoutRef.current) {
+      clearTimeout(timelinePreviewTimeoutRef.current);
+    }
+    timelinePreviewTimeoutRef.current = setTimeout(() => {
+      timelinePreviewRef.current = false;
+      if (!isTrainingRef.current) {
+        setTrainingPhase(TRAINING_PHASE.IDLE);
+      }
+    }, 1500);
+  }, []);
 
   const buildSession = useCallback(() => ({
     architecture,
@@ -718,9 +734,14 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
     selectedModel,
     uiState: {
       activePanel,
-      animationSpeed
+      animationSpeed,
+      guidedMode,
+      telemetryLevel
+    },
+    simulation: {
+      seed: simulationSeed
     }
-  }), [architecture, trainingParams, cameraMode, cameraState, selectedModel, activePanel, animationSpeed]);
+  }), [architecture, trainingParams, cameraMode, cameraState, selectedModel, activePanel, animationSpeed, guidedMode, telemetryLevel, simulationSeed]);
 
   const applySession = useCallback((rawSession) => {
     const { session, error } = parseSessionPayload(rawSession);
@@ -733,9 +754,16 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
     setTrainingParams(session.trainingParams);
     setCameraMode(session.cameraMode);
     setCameraState(session.cameraState);
+    cameraStateRef.current = session.cameraState;
     setSelectedModel(session.selectedModel);
     setActivePanel(session.uiState.activePanel);
     setAnimationSpeed(session.uiState.animationSpeed);
+    setGuidedMode(session.uiState.guidedMode);
+    setTelemetryLevel(session.uiState.telemetryLevel);
+    setSimulationSeed(sanitizeSeed(session.simulation.seed));
+    trainingRngRef.current = createSeededRng(sanitizeSeed(session.simulation.seed));
+    setTimelineProgress(0);
+    timelinePreviewRef.current = false;
     setStatusMessage('Session loaded.');
     return true;
   }, []);
@@ -802,6 +830,11 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
     applySession(sharedPayload);
   }, [sessionId, applySession]);
 
+  const guidedPhase = GUIDED_PHASE_COPY[trainingPhase] || GUIDED_PHASE_COPY[TRAINING_PHASE.IDLE];
+  const trainingBadge = getTrainingBadge({ isTraining, isTrainingComplete });
+  const telemetryLabel = getTelemetryLabel(telemetry);
+  const accuracyPercent = getProgressPercent(accuracy);
+
   return (
     <div className="w-full h-screen bg-gray-900 relative overflow-hidden">
       <div ref={mountRef} data-testid="three-canvas-mount" className="w-full h-full" />
@@ -810,17 +843,20 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
       <div className="absolute top-4 left-4 bg-black bg-opacity-90 text-white p-3 rounded-lg backdrop-blur-sm">
         <div className="flex items-center justify-between mb-2">
           <h2 className="text-lg font-bold text-cyan-400">Nexa Visualize</h2>
-          <div className={`text-xs px-2 py-1 rounded font-bold ${
-            isTrainingComplete ? 'bg-blue-600 animate-pulse' :
-            isTraining ? 'bg-green-600' : 'bg-gray-600'
-          }`}>
-            {isTrainingComplete ? 'TRAINED' : isTraining ? 'TRAINING' : 'IDLE'}
+          <div className={`text-xs px-2 py-1 rounded font-bold ${trainingBadge.className} ${isTrainingComplete && !prefersReducedMotion ? 'animate-pulse' : ''}`}>
+            {trainingBadge.label}
           </div>
         </div>
         <div className="text-xs text-gray-300">
           {architecture.length} layers • {architecture.reduce((sum, layer) => sum + layer.neurons, 0)} neurons
         </div>
         <div className="text-xs text-cyan-300 mt-1">Model: {selectedModel}</div>
+        {guidedMode && (
+          <div className="text-xs text-blue-400 mt-1">Phase: {guidedPhase.title}</div>
+        )}
+        {telemetryLevel === 'basic' && (
+          <div className="text-xs text-gray-400 mt-1">{telemetryLabel}</div>
+        )}
         {statusMessage && <div className="text-xs text-yellow-300 mt-1">{statusMessage}</div>}
       </div>
 
@@ -829,6 +865,7 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
         <div className="flex">
           <button
             onClick={() => togglePanel('architecture')}
+            aria-pressed={activePanel === 'architecture'}
             className={`px-3 py-2 rounded-l text-xs font-medium transition-colors ${
               activePanel === 'architecture' ? 'bg-purple-600' : 'bg-gray-700 hover:bg-gray-600'
             }`}
@@ -837,6 +874,7 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
           </button>
           <button
             onClick={() => togglePanel('parameters')}
+            aria-pressed={activePanel === 'parameters'}
             className={`px-3 py-2 text-xs font-medium transition-colors ${
               activePanel === 'parameters' ? 'bg-blue-600' : 'bg-gray-700 hover:bg-gray-600'
             }`}
@@ -845,6 +883,7 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
           </button>
           <button
             onClick={() => togglePanel('optimization')}
+            aria-pressed={activePanel === 'optimization'}
             className={`px-3 py-2 rounded-r text-xs font-medium transition-colors ${
               activePanel === 'optimization' ? 'bg-green-600' : 'bg-gray-700 hover:bg-gray-600'
             }`}
@@ -858,6 +897,7 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
             <div className="flex gap-1">
               <button
                 onClick={() => setCameraMode('auto')}
+                aria-pressed={cameraMode === 'auto'}
                 className={`px-2 py-1 rounded text-xs ${
                   cameraMode === 'auto' ? 'bg-purple-500' : 'bg-gray-600'
                 }`}
@@ -866,6 +906,7 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
               </button>
               <button
                 onClick={() => setCameraMode('manual')}
+                aria-pressed={cameraMode === 'manual'}
                 className={`px-2 py-1 rounded text-xs ${
                   cameraMode === 'manual' ? 'bg-purple-500' : 'bg-gray-600'
                 }`}
@@ -887,6 +928,13 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
               />
               <span className="w-8">{animationSpeed.toFixed(1)}x</span>
             </div>
+            <button
+              onClick={() => setGuidedMode(prev => !prev)}
+              aria-pressed={guidedMode}
+              className={`px-2 py-1 rounded text-xs ${guidedMode ? 'bg-blue-600' : 'bg-gray-600'}`}
+            >
+              Guided
+            </button>
           </div>
 
           <div className="grid grid-cols-3 gap-1 mb-2">
@@ -977,13 +1025,33 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
           </div>
           <div>
             <div className={`text-xs ${accuracy >= 0.9 ? 'text-green-300' : 'text-gray-400'}`}>
-              Accuracy {accuracy >= 0.9 && '🎉'}
+              Accuracy {accuracyPercent >= 90 ? '🎉' : ''}
             </div>
-            <div className={`text-lg font-bold ${accuracy >= 0.9 ? 'text-green-300 animate-pulse' : 'text-green-400'}`}>
-              {(accuracy * 100).toFixed(1)}%
+            <div className={`text-lg font-bold ${accuracyPercent >= 90 ? `text-green-300 ${prefersReducedMotion ? '' : 'animate-pulse'}` : 'text-green-400'}`}>
+              {accuracyPercent.toFixed(1)}%
             </div>
           </div>
         </div>
+        {guidedMode && (
+          <div className="text-xs text-gray-300 mt-1">
+            <div>{guidedPhase.description}</div>
+            <div className="mt-1 flex items-center gap-2">
+              <label htmlFor="timeline-scrubber">Timeline</label>
+              <input
+                id="timeline-scrubber"
+                aria-label="Training timeline scrubber"
+                type="range"
+                min="0"
+                max="100"
+                step="1"
+                value={timelineProgress}
+                onChange={(e) => scrubTimeline(parseInt(e.target.value, 10))}
+                className="w-12 h-1"
+              />
+              <span>{Math.round(timelineProgress)}%</span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Active Panel */}
@@ -1090,6 +1158,27 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
                     <option value="RMSprop">RMSprop</option>
                     <option value="AdaGrad">AdaGrad</option>
                   </select>
+                </div>
+                <div>
+                  <label className="block text-xs mb-1">Telemetry:</label>
+                  <select
+                    value={telemetryLevel}
+                    onChange={(e) => setTelemetryLevel(e.target.value)}
+                    className="w-full bg-gray-700 text-white text-xs p-2 rounded"
+                  >
+                    <option value="off">Off</option>
+                    <option value="basic">Basic</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs mb-1">Simulation Seed:</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={simulationSeed}
+                    onChange={(e) => setSimulationSeed(sanitizeSeed(parseInt(e.target.value, 10)))}
+                    className="w-full bg-gray-700 text-white text-xs p-2 rounded"
+                  />
                 </div>
               </div>
             </div>

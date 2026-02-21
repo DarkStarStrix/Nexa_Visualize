@@ -17,6 +17,7 @@
     "start": "react-scripts start",
     "build": "BROWSERSLIST_IGNORE_OLD_DATA=true react-scripts build",
     "test": "react-scripts test",
+    "test:smoke": "CI=true npm test -- --watch=false --runInBand src/happyPath.e2e.test.js",
     "lint": "BROWSERSLIST_IGNORE_OLD_DATA=true eslint \"src/**/*.{js,jsx,ts,tsx}\"",
     "eject": "react-scripts eject"
   },
@@ -37,5 +38,8 @@
       "last 1 firefox version",
       "last 1 safari version"
     ]
+  },
+  "devDependencies": {
+    "baseline-browser-mapping": "^2.10.0"
   }
 }
