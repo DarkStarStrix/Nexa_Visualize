@@ -247,7 +247,7 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
     neuronsRef.current = neurons;
     connectionsRef.current = connections;
 
-    const optimalDistance = calculateOptimalCameraDistance(layers);
+    const optimalDistance = calculateOptimalCameraDistance(layers, selectedModel);
     setCameraState(prev => ({
       ...prev,
       targetDistance: optimalDistance,
