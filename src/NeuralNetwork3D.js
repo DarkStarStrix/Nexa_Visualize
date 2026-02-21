@@ -52,6 +52,27 @@ const MODEL_PRESETS = {
     { neurons: 12, activation: 'ReLU', name: 'Router Merge' },
     { neurons: 5, activation: 'Softmax', name: 'Output' }
   ],
+  RNN: [
+    { neurons: 10, activation: 'Linear', name: 'Input Sequence' },
+    { neurons: 12, activation: 'Tanh', name: 'Recurrent Cell' },
+    { neurons: 8, activation: 'Softmax', name: 'Output Sequence' }
+  ],
+  LSTM: [
+    { neurons: 10, activation: 'Linear', name: 'Input Sequence' },
+    { neurons: 14, activation: 'Tanh', name: 'LSTM Cell' },
+    { neurons: 8, activation: 'Softmax', name: 'Output Sequence' }
+  ],
+  GRU: [
+    { neurons: 10, activation: 'Linear', name: 'Input Sequence' },
+    { neurons: 12, activation: 'Tanh', name: 'GRU Cell' },
+    { neurons: 8, activation: 'Softmax', name: 'Output Sequence' }
+  ],
+  GAN: [
+    { neurons: 8, activation: 'Linear', name: 'Latent Noise' },
+    { neurons: 14, activation: 'ReLU', name: 'Generator' },
+    { neurons: 10, activation: 'ReLU', name: 'Discriminator' },
+    { neurons: 2, activation: 'Softmax', name: 'Real/Fake' }
+  ],
   Autoencoder: [
     { neurons: 14, activation: 'Linear', name: 'Input' },
     { neurons: 10, activation: 'ReLU', name: 'Encoder 1' },
@@ -1172,6 +1193,10 @@ const NeuralNetwork3D = ({ sessionId, onSessionRouteChange }) => {
               <option value="Transformer">Transformer</option>
               <option value="Neural Operator">Neural Operator</option>
               <option value="MoE">MoE</option>
+              <option value="RNN">RNN</option>
+              <option value="LSTM">LSTM</option>
+              <option value="GRU">GRU</option>
+              <option value="GAN">GAN</option>
               <option value="Autoencoder">Autoencoder</option>
               <option value="MLP">MLP</option>
             </select>

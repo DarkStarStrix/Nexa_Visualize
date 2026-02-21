@@ -81,6 +81,9 @@ class PlaneGeometry extends Geometry {
   computeVertexNormals() {}
 }
 class SphereGeometry extends Geometry {}
+class BoxGeometry extends Geometry {}
+class CylinderGeometry extends Geometry {}
+class ConeGeometry extends Geometry {}
 class BufferGeometry extends Geometry {}
 
 class Material {
@@ -117,6 +120,9 @@ module.exports = {
   AmbientLight,
   DirectionalLight,
   SphereGeometry,
+  BoxGeometry,
+  CylinderGeometry,
+  ConeGeometry,
   MeshPhongMaterial,
   Mesh,
   BufferGeometry,

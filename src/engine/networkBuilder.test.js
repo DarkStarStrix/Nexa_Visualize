@@ -36,7 +36,7 @@ describe('network builder', () => {
     expect(transformerDistance).toBeGreaterThan(mlpDistance);
   });
 
-  test('adds transformer skip connections between non-adjacent layers', () => {
+  test('builds legacy transformer layout with expanded component stages', () => {
     const scene = new THREE.Scene();
     const layers = [
       { neurons: 6, color: 0xffffff, gridSize: [3, 2, 1], name: 'Token Input' },
@@ -53,7 +53,29 @@ describe('network builder', () => {
       random: () => 0
     });
 
-    const hasSkipConnection = connections.some((conn) => conn.userData.toLayer - conn.userData.fromLayer === 2);
-    expect(hasSkipConnection).toBe(true);
+    const hasCrossTowerConnection = connections.some((conn) => conn.userData.toLayer - conn.userData.fromLayer > 1);
+    expect(hasCrossTowerConnection).toBe(true);
+  });
+
+  test('builds GAN legacy components with generator and discriminator nodes', () => {
+    const scene = new THREE.Scene();
+    const layers = [
+      { neurons: 8, color: 0xffffff, gridSize: [4, 2, 1], name: 'Latent Noise' },
+      { neurons: 14, color: 0xffffff, gridSize: [4, 4, 1], name: 'Generator' },
+      { neurons: 10, color: 0xffffff, gridSize: [4, 3, 1], name: 'Discriminator' },
+      { neurons: 2, color: 0xffffff, gridSize: [2, 1, 1], name: 'Real/Fake' }
+    ];
+
+    const { neurons } = buildDenseNetwork({
+      scene,
+      layers,
+      selectedModel: 'GAN',
+      maxConnections: 300,
+      random: () => 0
+    });
+
+    const legacyTypes = neurons.flat().map((node) => node.userData.legacyType);
+    expect(legacyTypes).toContain('generator');
+    expect(legacyTypes).toContain('discriminator');
   });
 });

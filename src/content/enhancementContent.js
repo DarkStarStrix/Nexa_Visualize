@@ -70,5 +70,9 @@ export const MODEL_COMPARISON_BIAS = {
   Transformer: 0.03,
   'Neural Operator': 0.018,
   MoE: 0.01,
+  RNN: 0.008,
+  LSTM: 0.015,
+  GRU: 0.012,
+  GAN: -0.004,
   Autoencoder: 0.005
 };
